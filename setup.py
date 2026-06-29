@@ -42,6 +42,7 @@ installed.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -155,6 +156,61 @@ class CMakeBuild(build_ext):
             ["cmake", "--install", ".", "--config", cmake_build_type],
             cwd=self.build_temp,
         )
+        self._maybe_bundle_cuda_runtime_dlls()
+
+    def _maybe_bundle_cuda_runtime_dlls(self):
+        # Optionally copy the NVIDIA NPP (+ cudart) runtime DLLs into the package
+        # directory so the resulting Windows wheel is self-contained and imports
+        # on machines without a CUDA toolkit installed. These libraries are
+        # NVIDIA redistributables (CUDA EULA). Because Windows always searches a
+        # DLL's own directory for its dependencies, placing them next to
+        # libtorchcodec_core*.dll makes them resolve at load time without needing
+        # them on PATH. Opt-in via TORCHCODEC_BUNDLE_CUDA_DLLS=1; only meaningful
+        # for ENABLE_CUDA Windows builds. We deliberately do NOT bundle FFmpeg
+        # (GPL) -- it remains a user-provided runtime dependency.
+        if sys.platform != "win32":
+            return
+        if os.environ.get("TORCHCODEC_BUNDLE_CUDA_DLLS", "") not in (
+            "1",
+            "ON",
+            "on",
+            "true",
+            "True",
+        ):
+            return
+
+        cuda_path = os.environ.get("CUDA_PATH")
+        if not cuda_path:
+            for key, value in os.environ.items():
+                if key.startswith("CUDA_PATH_V"):
+                    cuda_path = value
+                    break
+        if not cuda_path:
+            print(
+                "WARNING: TORCHCODEC_BUNDLE_CUDA_DLLS is set but no CUDA_PATH* was "
+                "found; not bundling CUDA runtime DLLs.",
+                flush=True,
+            )
+            return
+
+        cuda_bin = Path(cuda_path) / "bin"
+        # nppc = NPP core; nppicc = color conversion (nppiNV12ToRGB_*); nppig =
+        # geometry; cudart = CUDA runtime (also shipped by torch, bundled here so
+        # the wheel stands alone).
+        wanted_prefixes = ("nppc64_", "nppicc64_", "nppig64_", "cudart64_")
+        copied = []
+        for dll in sorted(cuda_bin.glob("*.dll")):
+            if dll.name.lower().startswith(wanted_prefixes):
+                shutil.copy2(dll, Path(self._install_prefix) / dll.name)
+                copied.append(dll.name)
+        if copied:
+            print(f"Bundled CUDA runtime DLLs into wheel: {copied}", flush=True)
+        else:
+            print(
+                f"WARNING: TORCHCODEC_BUNDLE_CUDA_DLLS set but no NPP/cudart DLLs "
+                f"found in {cuda_bin}; nothing bundled.",
+                flush=True,
+            )
 
     def copy_extensions_to_source(self):
         """Copy built extensions from temporary folder back into source tree.

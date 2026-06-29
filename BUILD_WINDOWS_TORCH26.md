@@ -273,14 +273,28 @@ python -m build --wheel --no-isolation
 ```
 Install it into the target env: `pip install <that>.whl`.
 
-**Runtime requirements at the deploy site** (the wheel does *not* bundle these):
-- An FFmpeg **7.x shared** build with NVDEC (`avcodec-61.dll`, `h264_cuvid`).
+**Runtime requirements at the deploy site:**
+- An FFmpeg **7.x shared** build with NVDEC (`avcodec-61.dll`, `h264_cuvid`) —
+  always user-provided (we don't bundle FFmpeg; it's GPL).
 - The **NPP + CUDA-runtime DLLs** (`nppicc64_12.dll`, `nppig64_12.dll`,
-  `nppc64_12.dll`, `cudart64_12.dll`) — present in a CUDA 12.x `bin`.
-- Both discoverable: the `ops.py` shim registers FFmpeg dirs + `CUDA_PATH*`/PATH
-  dirs that contain them. If the target has neither CUDA installed nor those DLLs
-  on PATH, either install them or (future work) bundle them into the wheel
-  alongside the core libs.
+  `nppc64_12.dll`, `cudart64_12.dll`). `cudart` ships inside torch's cu124 wheel;
+  **NPP** comes from a CUDA toolkit — *unless you bundle it* (below).
+
+**Self-contained wheel (bundle NPP) — for hosting/sharing:** set
+`TORCHCODEC_BUNDLE_CUDA_DLLS=1` at build time. `setup.py` then copies the NPP
+(+ cudart) DLLs from `%CUDA_PATH%\bin` into the wheel next to the core libs;
+Windows always searches a DLL's own directory for its dependencies, so they
+resolve with **no CUDA toolkit and nothing on PATH** at the deploy site. NPP is
+an NVIDIA redistributable, so this is license-clean. FFmpeg still required.
+```bat
+set ENABLE_CUDA=1
+set TORCHCODEC_BUNDLE_CUDA_DLLS=1
+set BUILD_VERSION=0.7.0+cu124.torch26
+set BUILD_AGAINST_ALL_FFMPEG_FROM_S3=1
+python -m build --wheel --no-isolation
+```
+Without bundling, the `ops.py` shim still finds NPP/FFmpeg via `CUDA_PATH*`/PATH
+(works on *your* box where CUDA 12.3 is installed).
 
 > Is it *really* NVDEC (not a CPU→GPU copy)? The cuda path tries hardware decode
 > first and only falls back to CPU if NVDEC can't handle the codec; h264 is
@@ -393,5 +407,12 @@ torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmaked
   2.6) links `CUDA::nppicc/nppig/nppc`+`cudart`; FFmpeg n7.1.5 (`h264_cuvid`) +
   CUDA 12.3 NPP DLLs resolve at runtime. `VideoDecoder('...mp4', device='cuda')[0]`
   → `torch.Size([3, 270, 480]) torch.uint8 cuda:0`.
-- [ ] Milestone 3 — CI producing labeled wheels (optional)
-- [ ] Distributable wheel for deployment into the ComfyUI/torch-2.6 env
+- [x] NVDEC verified on hardware: `nvidia-smi dmon` showed the `dec` engine at
+  63–68% during a CUDA decode loop (≈3.7k fps on the 480p clip); 0% on CPU runs.
+  (At 480p, CPU decode is faster in wall-clock — NVDEC's win is high-res /
+  multi-stream / keeping frames on-GPU; this is overhead-bound, not a fallback.)
+- [x] Plain wheel built: `torchcodec-0.7.0+cu124.torch26-cp311-cp311-win_amd64.whl`.
+- [x] NPP-bundling implemented (`TORCHCODEC_BUNDLE_CUDA_DLLS=1`) for self-contained wheels.
+- [ ] Validate bundled wheel imports with no CUDA toolkit / NPP on PATH; deploy into ComfyUI (cp311).
+- [ ] Tag fork commit + GitHub Release hosting the `.whl`.
+- [ ] Milestone 3 — CI producing labeled wheels (optional).
