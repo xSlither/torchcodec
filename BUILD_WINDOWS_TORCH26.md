@@ -95,7 +95,11 @@ already builds CPU on Windows; the only variable is torch 2.6 vs 2.8.
   Tools Command Prompt for VS 2022".
 - **`uv`** — creates the venv and installs everything into it (torch, cmake,
   ninja, pybind11, build).
-- **CUDA 12.4** — installed globally (needed for Milestone 2; harmless for CPU).
+- **CUDA Toolkit 12.4, active** — required even for the *CPU* build: torch
+  `2.6.0+cu124`'s CMake forces `enable_language(CUDA)`, so CMake must find a
+  working `nvcc`. It must be **≥ 12.4** because recent MSVC (≥ 14.44 / VS 17.14)
+  STL hard-blocks older CUDA (`STL1002: expected CUDA 12.4 or newer`). Make 12.4
+  the active toolkit before building (see Troubleshooting §8).
 - **FFmpeg "shared" dev libraries.** Two options:
   - *Simple (single FFmpeg, pkg-config path):* download an FFmpeg **shared**
     build that includes `lib/pkgconfig/*.pc` + headers (e.g. BtbN
@@ -269,7 +273,29 @@ _None yet — to be filled in as Milestone 1/2 surface any._
 
 ---
 
-## 7. Status
+## 7. Troubleshooting log
+
+### `STL1002: Unexpected compiler version, expected CUDA 12.4 or newer`
+Configure fails inside *PyTorch's* CMake (`TorchConfig → Caffe2 → cuda.cmake →
+enable_language(CUDA)`), not in torchcodec. Root cause: torch `+cu124` forces the
+CUDA language on, CMake picked up an **older CUDA (e.g. 12.3)**, and a recent
+MSVC STL (≥ 14.44) requires CUDA ≥ 12.4. Fix: make **CUDA 12.4** the active
+toolkit *before* building —
+```powershell
+$cuda = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4"
+$env:CUDA_PATH = $cuda; $env:CUDACXX = "$cuda\bin\nvcc.exe"
+$env:Path = "$cuda\bin;$cuda\libnvvp;$env:Path"
+nvcc --version   # confirm 12.4
+```
+If CUDA 12.4 + a *very* new MSVC still fights (CUDA 12.4 officially supports up
+to VS 17.9), install the **MSVC v143 14.39** toolset via the VS Installer and
+build from its dev prompt (or set `VCToolsVersion=14.39`).
+
+### CMake 4.x / pybind11 3.x
+Pin `cmake<4` to match TorchCodec CI and avoid CMake-4 policy breakage in older
+torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmakedir`.
+
+## 8. Status
 
 - [x] Branch based on `v0.7.0`
 - [ ] Milestone 1 — CPU build green against torch 2.6
