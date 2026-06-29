@@ -1,0 +1,100 @@
+name: Windows torch-2.6 CUDA wheel
+
+# Bespoke workflow that builds this fork's torchcodec wheel against a PINNED
+# torch 2.6.0 + cu124 on Windows. (PyTorch's test-infra reusable workflow can't
+# pin to an arbitrary torch version, so we do it by hand.)
+#
+# GitHub-hosted runners have NO GPU, so this job:
+#   - builds the CUDA wheel (NVDEC/NPP compiled in, NPP DLLs bundled), then
+#   - runs a CPU-only import + decode smoke test.
+# NVDEC itself is verified separately on a real GPU box.
+#
+# Trigger manually: Actions tab -> "Windows torch-2.6 CUDA wheel" -> Run workflow.
+#
+# FIRST-CUT NOTES (may need a trial run to tune):
+#   - CUDA 12.4 is used on CI on purpose: its STL floor matches recent MSVC, so
+#     no older-toolset pin is needed (unlike the local CUDA-12.3 build). The
+#     resulting wheel is runtime-compatible with torch cu124.
+#   - Pinned action versions (Jimver/cuda-toolkit, ilammy/msvc-dev-cmd) and the
+#     BtbN FFmpeg asset name may need bumping over time.
+
+on:
+  workflow_dispatch:
+    inputs:
+      python-version:
+        description: "Python version (drives the cpXY wheel tag)"
+        default: "3.11"
+      build-version:
+        description: "BUILD_VERSION stamped into the wheel"
+        default: "0.7.0+cu124.torch26"
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install CUDA Toolkit 12.4
+        uses: Jimver/cuda-toolkit@v0.2.19
+        id: cuda
+        with:
+          cuda: "12.4.1"
+          method: network
+
+      - name: Set up MSVC dev environment (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install build deps + torch 2.6 (cu124)
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+          pip install "cmake<4" ninja pybind11 numpy setuptools wheel build
+          echo "pybind11_DIR=$(python -m pybind11 --cmakedir)" >> $env:GITHUB_ENV
+
+      - name: Build wheel
+        shell: pwsh
+        env:
+          ENABLE_CUDA: "1"
+          TORCHCODEC_BUNDLE_CUDA_DLLS: "1"
+          BUILD_AGAINST_ALL_FFMPEG_FROM_S3: "1"
+          TORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR: "ON"
+          BUILD_VERSION: ${{ inputs.build-version }}
+        run: |
+          python -m build --wheel --no-isolation
+          Get-ChildItem dist
+
+      - name: Verify NPP DLLs are bundled
+        shell: pwsh
+        run: |
+          $whl = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
+          python -c "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); dlls=[n for n in z.namelist() if n.lower().endswith('.dll')]; print(chr(10).join(dlls)); assert any('nppicc' in d.lower() for d in dlls), 'NPP not bundled!'" "$whl"
+
+      - name: CPU import + decode smoke test
+        shell: pwsh
+        run: |
+          # No GPU on hosted runners -> CPU path only. Needs FFmpeg 7.x shared.
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-gpl-shared.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_dir -Force
+          $bin = (Get-ChildItem ffmpeg_dir -Directory | Select-Object -First 1).FullName + "\bin"
+          echo $bin >> $env:GITHUB_PATH
+          $whl = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
+          pip install "$whl"
+          # Remove src/ so the import resolves from the installed wheel, not the tree.
+          Remove-Item -Recurse -Force src
+          python -c "import torch, torchcodec; from torchcodec.decoders import VideoDecoder; d=VideoDecoder(r'test/resources/nasa_13013.mp4'); print('torch', torch.__version__, '| torchcodec', torchcodec.__version__); print('frame0', d[0].shape, d[0].dtype)"
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: torchcodec-win-cu124-torch26-cp${{ inputs.python-version }}
+          path: dist/*.whl
+          if-no-files-found: error
