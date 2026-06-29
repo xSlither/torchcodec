@@ -304,6 +304,16 @@ that CUDA's era:
 If 14.39 still trips the guard, step down to 14.38. If CMake's Ninja+CUDA pairing
 can't find the host compiler, set `CUDAHOSTCXX` to the active `cl.exe`.
 
+### `target "torch::nvtoolsext" contains CUDA::nvToolsExt but the target was not found`
+Another *PyTorch* CMake issue (not torchcodec). CUDA 12.x removed the legacy
+`nvToolsExt` library (NVTX is now header-only NVTX3); torch 2.6's
+`Caffe2/public/cuda.cmake` fails to find NVTX3 on Windows and falls back to the
+missing `CUDA::nvToolsExt` target, so `find_package(Torch)` dies at generate
+time. NVTX is an unused profiling shim here. Fixed in our fork's
+`src/torchcodec/_core/CMakeLists.txt`: before `find_package(Torch)` we
+`find_package(CUDAToolkit QUIET)` and define an empty `CUDA::nvToolsExt`
+stand-in if it's absent (WIN32-only, so Linux/macOS CUDA builds are untouched).
+
 ### CMake 4.x / pybind11 3.x
 Pin `cmake<4` to match TorchCodec CI and avoid CMake-4 policy breakage in older
 torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmakedir`.

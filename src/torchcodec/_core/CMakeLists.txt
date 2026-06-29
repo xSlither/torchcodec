@@ -5,6 +5,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 REQUIRED)
+
+if(WIN32)
+    # torch 2.6's CUDA CMake (Caffe2/public/cuda.cmake) references the legacy
+    # `CUDA::nvToolsExt` target for `torch::nvtoolsext`. CUDA 12.x removed that
+    # library (NVTX is now the header-only NVTX3), and torch's nvtx3 fallback
+    # fails to detect it on Windows -- so find_package(Torch) errors at generate
+    # time with "target CUDA::nvToolsExt not found". NVTX is only a profiling
+    # shim and is unused by torchcodec, so we ensure the toolkit's imported
+    # targets exist and provide an empty stand-in if the legacy target is
+    # missing. Harmless: it links nothing.
+    find_package(CUDAToolkit QUIET)
+    if(NOT TARGET CUDA::nvToolsExt)
+        add_library(CUDA::nvToolsExt INTERFACE IMPORTED GLOBAL)
+    endif()
+endif()
+
 find_package(Torch REQUIRED)
 find_package(Python3 ${PYTHON_VERSION} EXACT COMPONENTS Development)
 
