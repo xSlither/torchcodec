@@ -281,7 +281,12 @@ def _write_version_files():
                 .decode("ascii")
                 .strip()
             )
-            version += "+" + sha[:7]
+            # PEP 440 allows only one local-version segment ("+..."). If
+            # version.txt already carries one (e.g. "0.7.0+cu124.torch26"),
+            # appending "+<sha>" would be invalid, so only add the sha when
+            # there isn't already a local segment.
+            if "+" not in version:
+                version += "+" + sha[:7]
         except Exception:
             print("INFO: Didn't find sha. Is this a git repo?")
 
