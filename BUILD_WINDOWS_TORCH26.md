@@ -273,7 +273,7 @@ _None yet — to be filled in as Milestone 1/2 surface any._
 
 | File | Symbol / issue | Fix (source) |
 |---|---|---|
-| | | |
+| — | **None needed.** v0.7.0 C++ compiles clean against torch 2.6 (warnings only: C4244/C4267/C4702/C4458/C4245). torch-2.6 source compatibility confirmed. | n/a |
 
 ---
 
@@ -314,6 +314,15 @@ time. NVTX is an unused profiling shim here. Fixed in our fork's
 `find_package(CUDAToolkit QUIET)` and define an empty `CUDA::nvToolsExt`
 stand-in if it's absent (WIN32-only, so Linux/macOS CUDA builds are untouched).
 
+### `import torchcodec` fails: "Could not load libtorchcodec_coreN" / FFmpeg not found
+The build links against the S3 FFmpeg (build-time only); at **runtime** torchcodec
+dlopens the FFmpeg **shared** DLLs and loads the `libtorchcodec_coreN` matching the
+FFmpeg major version it finds. A non-shared FFmpeg build (just `ffmpeg.exe`, e.g.
+BtbN `...-win64-gpl`) has no DLLs, so all cores fail to load. Fix: install an
+FFmpeg **shared** build (BtbN `ffmpeg-*-win64-gpl-shared`, which is FFmpeg 7 →
+loads `libtorchcodec_core7`, and includes NVDEC/cuvid for Milestone 2) and put its
+`bin\` (containing `avutil-*.dll`, `avcodec-*.dll`, …) on `PATH`.
+
 ### CMake 4.x / pybind11 3.x
 Pin `cmake<4` to match TorchCodec CI and avoid CMake-4 policy breakage in older
 torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmakedir`.
@@ -321,6 +330,7 @@ torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmaked
 ## 8. Status
 
 - [x] Branch based on `v0.7.0`
-- [ ] Milestone 1 — CPU build green against torch 2.6
+- [x] Milestone 1 — CPU build **compiles + links** against torch 2.6 (cp311, FFmpeg 4/5/6/7), editable install succeeds. Toolchain: CUDA 12.3 + MSVC 14.39 + Ninja.
+- [ ] Milestone 1 — runtime validation (`import torchcodec` + CPU decode) — needs FFmpeg **shared** DLLs on PATH (see §7).
 - [ ] Milestone 2 — NVDEC CUDA build green against torch 2.6
 - [ ] Milestone 3 — CI producing labeled wheels
