@@ -317,11 +317,18 @@ stand-in if it's absent (WIN32-only, so Linux/macOS CUDA builds are untouched).
 ### `import torchcodec` fails: "Could not load libtorchcodec_coreN" / FFmpeg not found
 The build links against the S3 FFmpeg (build-time only); at **runtime** torchcodec
 dlopens the FFmpeg **shared** DLLs and loads the `libtorchcodec_coreN` matching the
-FFmpeg major version it finds. A non-shared FFmpeg build (just `ffmpeg.exe`, e.g.
-BtbN `...-win64-gpl`) has no DLLs, so all cores fail to load. Fix: install an
-FFmpeg **shared** build (BtbN `ffmpeg-*-win64-gpl-shared`, which is FFmpeg 7 →
-loads `libtorchcodec_core7`, and includes NVDEC/cuvid for Milestone 2) and put its
-`bin\` (containing `avutil-*.dll`, `avcodec-*.dll`, …) on `PATH`.
+FFmpeg major version it finds. Two ways this fails:
+- A **non-shared** FFmpeg build (just `ffmpeg.exe`, e.g. BtbN `...-win64-gpl`) has
+  no DLLs, so all cores fail to load.
+- A build that is **too new**: v0.7.0 supports only **FFmpeg 4–7** (libavcodec
+  58–61) and `core7` links the `avcodec-61` soname. BtbN/gyan **`master`/latest is
+  now FFmpeg 8** (libavcodec 62/63) and will **not** load.
+
+Fix: install an FFmpeg **7.x shared** build (libavcodec **61**) — e.g. BtbN
+`ffmpeg-n7.1-latest-win64-gpl-shared.zip` (the `n7.x` branch, *not* master) or a
+gyan.dev `7.1 ...-shared` archive — confirm `bin\avcodec-61.dll` exists, and put
+its `bin\` on `PATH`. The `gpl-shared` n7.x build also carries NVDEC/cuvid for
+Milestone 2.
 
 ### CMake 4.x / pybind11 3.x
 Pin `cmake<4` to match TorchCodec CI and avoid CMake-4 policy breakage in older
