@@ -63,23 +63,23 @@ The actual MSVC/CUDA compile must happen on **Windows**. This repo (branch
   (Milestone 3). You chose **both**: local first for fast iteration, then CI for
   clean reproducible wheels.
 
-### ⚠️ Embedded-Python caveat (important for your setup)
+### Build environment: a `uv` venv (your setup)
 
-You run a portable/embedded Python (`./python/python.exe`, ComfyUI-style).
-Embeddable CPython usually **lacks `Python.h` and `pythonXY.lib`**, which
-`find_package(Python3 ... COMPONENTS Development)` requires — so building
-*directly* in it will likely fail at configure time.
+You build in a fresh clone on Windows with a per-project **`uv` venv**, CUDA
+**12.4** installed globally, and torch pinned to **2.6.0+cu124** — reproducing
+the environment you target elsewhere.
 
-**Recommended:** build the wheel in a **standard full CPython** of the *same
-minor version* as your embedded Python (so the `cpXY` ABI tag matches), with
-torch 2.6 installed, then `pip install` the resulting `.whl` into the embedded
-Python. A wheel built under CPython 3.x works in embeddable 3.x of the same
-minor version.
-
-```bat
-:: find the minor version you must match
-.\python\python.exe --version
-```
+- **Pick the venv's Python minor version to match wherever the wheel will run**
+  (e.g. your ComfyUI Python). The wheel is ABI-tagged `cpXY`, so a wheel built
+  under 3.12 installs into any 3.12 environment, including an embeddable one.
+- **uv-managed CPython includes dev headers + import lib** (it uses
+  python-build-standalone), so `find_package(Python3 ... COMPONENTS Development)`
+  works — *unlike* a bare ComfyUI embeddable distribution. That's why we build in
+  the venv and deploy the resulting wheel.
+- Run the build from an **"x64 Native Tools Command Prompt for VS 2022"** (so
+  `cl.exe` is on PATH) with the venv activated. CUDA 12.4's installer sets
+  `CUDA_PATH`, so `find_package(CUDAToolkit)` locates NPP for Milestone 2 with no
+  extra config.
 
 ---
 
@@ -91,12 +91,11 @@ already builds CPU on Windows; the only variable is torch 2.6 vs 2.8.
 
 ### 3.1 Prerequisites (Windows)
 
-- **MSVC** — Visual Studio 2022 Build Tools (v17.x). `vc_env_helper.bat` already
-  targets VS 17–18.
-- **CMake ≥ 3.18** and **Ninja** — you already have both (`cmake 3.30.5`,
-  `ninja 1.11.x` in your env).
-- **pybind11** — already installed (`2.13.6`). Expose its CMake config:
-  `for /f %i in ('python -m pybind11 --cmakedir') do set pybind11_DIR=%i`
+- **MSVC** — Visual Studio 2022 Build Tools (v17.x); build from the "x64 Native
+  Tools Command Prompt for VS 2022".
+- **`uv`** — creates the venv and installs everything into it (torch, cmake,
+  ninja, pybind11, build).
+- **CUDA 12.4** — installed globally (needed for Milestone 2; harmless for CPU).
 - **FFmpeg "shared" dev libraries.** Two options:
   - *Simple (single FFmpeg, pkg-config path):* download an FFmpeg **shared**
     build that includes `lib/pkgconfig/*.pc` + headers (e.g. BtbN
@@ -107,19 +106,30 @@ already builds CPU on Windows; the only variable is torch 2.6 vs 2.8.
     non-GPL FFmpeg (4–7). Needs network to their S3. **Note:** these non-GPL libs
     are build-time only and **do not provide NVDEC at runtime** (fine for CPU).
 
-### 3.2 Build (in the full-CPython env with torch 2.6 installed)
+### 3.2 Build (from the repo root, in an x64 VS dev prompt)
 
 ```bat
-:: from the repo root, inside a VS x64 dev prompt (or via vc_env_helper.bat)
+:: 0) get this branch (a fresh clone lands on main/0.15, not our v0.7.0 base)
+git fetch origin
+git checkout claude/torchcodec-windows-wheels-lqchhj
+
+:: 1) venv via uv — match the Python minor version to your deploy target
+uv venv --python 3.12 .venv
+.venv\Scripts\activate
+
+:: 2) torch 2.6 (cu124) + build deps into the venv
+uv pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+uv pip install setuptools wheel build cmake ninja pybind11 numpy pytest pillow
+
+:: 3) build config
 set TORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR=ON
 for /f %i in ('python -m pybind11 --cmakedir') do set pybind11_DIR=%i
-
 :: pick ONE FFmpeg path:
 set PKG_CONFIG_PATH=C:\path\to\ffmpeg-shared\lib\pkgconfig
 :: ...or:  set BUILD_AGAINST_ALL_FFMPEG_FROM_S3=1
 
-:: editable dev build = fastest iteration; validates compile + import
-python -m pip install -e . --no-build-isolation -v
+:: 4) editable dev build = fastest iteration; validates compile + import
+uv pip install -e . --no-build-isolation -v
 ```
 
 ### 3.3 Validate
@@ -206,11 +216,12 @@ set ENABLE_CUDA=1
 ### 4.3 Build & validate
 
 ```bat
+:: same activated uv venv as Milestone 1; CUDA 12.4 is already installed globally
 set ENABLE_CUDA=1
 set TORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR=ON
 for /f %i in ('python -m pybind11 --cmakedir') do set pybind11_DIR=%i
 set PKG_CONFIG_PATH=C:\path\to\ffmpeg-nvdec-shared\lib\pkgconfig
-python -m pip install -e . --no-build-isolation -v
+uv pip install -e . --no-build-isolation -v
 ```
 ```bat
 python -c "from torchcodec.decoders import VideoDecoder; d=VideoDecoder('test/resources/nasa_13013.mp4', device='cuda'); f=d[0]; print(f.shape, f.device)"
@@ -225,7 +236,9 @@ GPU (no host round-trip).
   list accordingly.
 - 10-bit / non-NV12 video is unsupported by this NPP path (CPU fallback only) —
   same as upstream at 0.7.
-- `find_package(Python3 COMPONENTS Development)` + embedded Python (see §2.x).
+- `find_package(Python3 COMPONENTS Development)` resolution: uv-managed CPython
+  ships headers + import lib, so this should work; if it ever fails, pass
+  `-DPython3_ROOT_DIR=<venv>` (or use a python.org interpreter for the venv).
 
 ---
 
