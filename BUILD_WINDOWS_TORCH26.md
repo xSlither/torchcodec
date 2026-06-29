@@ -224,13 +224,23 @@ set ENABLE_CUDA=1
 ### 4.3 Build & validate
 
 ```bat
-:: same activated uv venv as Milestone 1; CUDA 12.4 is already installed globally
+:: From a clean cmd.exe, pin the CUDA-12.3-compatible toolset (as in Milestone 1):
+"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 -vcvars_ver=14.39
+cl              :: must say 19.39.x
+nvcc --version  :: 12.3
+
+cd /d C:\Users\chase\Documents\GitHub\torchcodec
+call .venv\Scripts\activate.bat
 set ENABLE_CUDA=1
 set TORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR=ON
-for /f %i in ('python -m pybind11 --cmakedir') do set pybind11_DIR=%i
-set PKG_CONFIG_PATH=C:\path\to\ffmpeg-nvdec-shared\lib\pkgconfig
-uv pip install -e . --no-build-isolation -v
+for /f "delims=" %i in ('python -m pybind11 --cmakedir') do set pybind11_DIR=%i
+set BUILD_AGAINST_ALL_FFMPEG_FROM_S3=1
+uv pip install -e . --no-build-isolation -v --reinstall-package torchcodec
 ```
+The CMake NPP/CUDA discovery (`find_package(CUDAToolkit)` → `CUDA::nppicc/nppig/nppc`
++ `cudart`) and the runtime CUDA/NPP DLL registration are already wired into the
+fork. At runtime keep the FFmpeg 7.x shared `bin` on PATH **and** the CUDA 12.3
+`bin` on PATH (the loader shim registers both for the DLL search).
 ```bat
 python -c "from torchcodec.decoders import VideoDecoder; d=VideoDecoder('test/resources/nasa_13013.mp4', device='cuda'); f=d[0]; print(f.shape, f.device)"
 ```
@@ -346,7 +356,9 @@ torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmaked
 ## 8. Status
 
 - [x] Branch based on `v0.7.0`
-- [x] Milestone 1 — CPU build **compiles + links** against torch 2.6 (cp311, FFmpeg 4/5/6/7), editable install succeeds. Toolchain: CUDA 12.3 + MSVC 14.39 + Ninja.
-- [ ] Milestone 1 — runtime validation (`import torchcodec` + CPU decode) — needs FFmpeg **shared** DLLs on PATH (see §7).
-- [ ] Milestone 2 — NVDEC CUDA build green against torch 2.6
+- [x] **Milestone 1 — DONE.** CPU build compiles + links + imports + decodes against
+  torch 2.6 (cp311, FFmpeg 7). Decoded `nasa_13013.mp4` → `[3, 270, 480] uint8`.
+  Toolchain: CUDA 12.3 + MSVC 14.39 + Ninja; runtime FFmpeg 7.x shared on PATH.
+- [~] Milestone 2 — NVDEC: build deltas applied (CMake NPP via CUDAToolkit;
+  runtime CUDA/NPP DLL registration). Pending: `ENABLE_CUDA=1` rebuild + `device="cuda"` decode validation.
 - [ ] Milestone 3 — CI producing labeled wheels

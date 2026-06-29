@@ -24,18 +24,33 @@ from torchcodec._internally_replaced_utils import (  # @manual=//pytorch/torchco
 _pybind_ops: Optional[ModuleType] = None
 
 
-def _maybe_add_ffmpeg_dll_directories() -> None:
+# DLL-name prefixes (lower-cased) for torchcodec's runtime dependencies on
+# Windows: FFmpeg shared libraries, and -- for CUDA/NVDEC builds -- the NPP and
+# CUDA-runtime libraries that CudaDeviceInterface links against.
+_WINDOWS_RUNTIME_DLL_PREFIXES = (
+    "avutil-",
+    "avcodec-",
+    "avformat-",
+    "nppc",
+    "nppicc",
+    "nppig",
+    "cudart",
+)
+
+
+def _maybe_add_runtime_dll_directories() -> None:
     # On Windows + Python 3.8+, the dependencies of a DLL loaded via ctypes
     # (which is how torch.ops.load_library loads our core libraries) are NOT
     # resolved through the PATH environment variable -- only through directories
     # registered with os.add_dll_directory(). Our core libraries depend on the
-    # FFmpeg shared DLLs (avutil-*.dll, avcodec-*.dll, ...), so simply having
-    # FFmpeg on PATH is not enough; we must register its directory explicitly.
+    # FFmpeg shared DLLs, and CUDA builds additionally depend on the NPP / CUDA
+    # runtime DLLs, so simply having those on PATH is not enough; we must
+    # register their directories explicitly.
     #
-    # We register an explicit override (TORCHCODEC_FFMPEG_DIR), a conda
-    # Library/bin if present, and any directory on PATH that actually contains
-    # FFmpeg DLLs. Restricting to dirs that hold FFmpeg DLLs keeps the added
-    # search set minimal and avoids surprises.
+    # We consider: an explicit FFmpeg override (TORCHCODEC_FFMPEG_DIR), a conda
+    # Library/bin, the CUDA toolkit bin dirs (CUDA_PATH*), and every directory on
+    # PATH -- then register only those that actually contain one of the runtime
+    # DLLs above, to keep the added search set minimal.
     if sys.platform not in ("win32", "cygwin"):
         return
 
@@ -46,6 +61,10 @@ def _maybe_add_ffmpeg_dll_directories() -> None:
     conda_prefix = os.environ.get("CONDA_PREFIX")
     if conda_prefix:
         candidates.append(os.path.join(conda_prefix, "Library", "bin"))
+    for var, value in os.environ.items():
+        # CUDA_PATH, CUDA_PATH_V12_3, CUDA_PATH_V12_4, ... -> <root>\bin
+        if var == "CUDA_PATH" or var.startswith("CUDA_PATH_V"):
+            candidates.append(os.path.join(value, "bin"))
     candidates.extend(os.environ.get("PATH", "").split(os.pathsep))
 
     seen = set()
@@ -60,12 +79,12 @@ def _maybe_add_ffmpeg_dll_directories() -> None:
             entries = os.listdir(directory)
         except OSError:
             continue
-        has_ffmpeg_dll = any(
+        has_runtime_dll = any(
             entry.lower().endswith(".dll")
-            and entry.lower().startswith(("avutil-", "avcodec-", "avformat-"))
+            and entry.lower().startswith(_WINDOWS_RUNTIME_DLL_PREFIXES)
             for entry in entries
         )
-        if has_ffmpeg_dll:
+        if has_runtime_dll:
             try:
                 os.add_dll_directory(directory)
             except OSError:
@@ -73,9 +92,10 @@ def _maybe_add_ffmpeg_dll_directories() -> None:
 
 
 def load_torchcodec_shared_libraries():
-    # Make the FFmpeg shared DLLs discoverable on Windows before we try to load
-    # our core libraries (which depend on them). No-op on other platforms.
-    _maybe_add_ffmpeg_dll_directories()
+    # Make the FFmpeg (and, for CUDA builds, NPP/CUDA) shared DLLs discoverable
+    # on Windows before we try to load our core libraries (which depend on
+    # them). No-op on other platforms.
+    _maybe_add_runtime_dll_directories()
 
     # Successively try to load the shared libraries for each version of FFmpeg
     # that we support. We always start with the highest version, working our way

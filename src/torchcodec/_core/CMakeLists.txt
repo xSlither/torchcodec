@@ -123,9 +123,20 @@ function(make_torchcodec_libraries
     )
 
     if(ENABLE_CUDA)
+        # Use modern CUDAToolkit imported targets. The legacy FindCUDA variables
+        # CUDA_nppi_LIBRARY / CUDA_nppicc_LIBRARY are not populated here (v0.7
+        # never calls find_package(CUDA)) and, in CUDA 12.x, there is no single
+        # "nppi" library -- NPP is split into nppc/nppicc/nppig/... The YUV->RGB
+        # routines used by CudaDeviceInterface (nppiNV12ToRGB_*) live in nppicc;
+        # nppc is the NPP core; cudart is needed for the CUDA runtime API calls.
+        # These imported targets also propagate the CUDA include dirs (npp.h,
+        # cuda_runtime.h) to consumers.
+        find_package(CUDAToolkit REQUIRED)
         list(APPEND core_library_dependencies
-            ${CUDA_nppi_LIBRARY}
-            ${CUDA_nppicc_LIBRARY}
+            CUDA::cudart
+            CUDA::nppicc
+            CUDA::nppig
+            CUDA::nppc
         )
     endif()
 
@@ -135,6 +146,13 @@ function(make_torchcodec_libraries
         "${core_sources}"
         "${core_library_dependencies}"
     )
+
+    if(ENABLE_CUDA)
+        # Belt-and-suspenders: ensure the CUDA headers (npp.h, cuda_runtime.h)
+        # are on the include path for CudaDeviceInterface.cpp, even if imported
+        # target propagation is incomplete on some toolchains.
+        target_include_directories(${core_library_name} PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    endif()
 
     # 2. Create libtorchcodec_custom_opsN.{ext}.
     set(custom_ops_library_name "libtorchcodec_custom_ops${ffmpeg_major_version}")
