@@ -260,6 +260,35 @@ GPU (no host round-trip).
 
 ---
 
+## 4.5 Building a distributable wheel (for the ComfyUI / torch-2.6 env)
+
+The editable install proves it works in this venv. To deploy into another
+cp311 + torch-2.6 environment, build a real wheel (same activated toolset/venv):
+```bat
+set ENABLE_CUDA=1
+set BUILD_VERSION=0.7.0+cu123.torch26   :: stamps the wheel name; no git-sha suffix
+set BUILD_AGAINST_ALL_FFMPEG_FROM_S3=1
+python -m build --wheel --no-isolation
+:: -> dist\torchcodec-0.7.0+cu123.torch26-cp311-cp311-win_amd64.whl
+```
+Install it into the target env: `pip install <that>.whl`.
+
+**Runtime requirements at the deploy site** (the wheel does *not* bundle these):
+- An FFmpeg **7.x shared** build with NVDEC (`avcodec-61.dll`, `h264_cuvid`).
+- The **NPP + CUDA-runtime DLLs** (`nppicc64_12.dll`, `nppig64_12.dll`,
+  `nppc64_12.dll`, `cudart64_12.dll`) — present in a CUDA 12.x `bin`.
+- Both discoverable: the `ops.py` shim registers FFmpeg dirs + `CUDA_PATH*`/PATH
+  dirs that contain them. If the target has neither CUDA installed nor those DLLs
+  on PATH, either install them or (future work) bundle them into the wheel
+  alongside the core libs.
+
+> Is it *really* NVDEC (not a CPU→GPU copy)? The cuda path tries hardware decode
+> first and only falls back to CPU if NVDEC can't handle the codec; h264 is
+> NVDEC-supported and the decode returned a `cuda:0` tensor without the NV12/
+> hw_frames_ctx errors, so NVDEC engaged. To confirm with numbers, run
+> `python benchmarks/decoders/gpu_benchmark.py --devices=cuda:0,cpu --resize_devices=none`
+> or watch `nvidia-smi dmon` (the `dec` column) during a decode loop.
+
 ## 5. Milestone 3 — CI (GitHub Actions, both CPU and CUDA)
 
 v0.7's `windows_wheel.yaml` points at a personal fork
@@ -283,7 +312,7 @@ _None yet — to be filled in as Milestone 1/2 surface any._
 
 | File | Symbol / issue | Fix (source) |
 |---|---|---|
-| — | **None needed.** v0.7.0 C++ compiles clean against torch 2.6 (warnings only: C4244/C4267/C4702/C4458/C4245). torch-2.6 source compatibility confirmed. | n/a |
+| — | **None needed.** v0.7.0 C++ (incl. `CudaDeviceInterface.cpp`) compiles clean against torch 2.6 (warnings only: C4244/C4267/C4702/C4458/C4245). torch-2.6 source compatibility confirmed for both CPU and CUDA paths. | n/a |
 
 ---
 
@@ -359,6 +388,10 @@ torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmaked
 - [x] **Milestone 1 — DONE.** CPU build compiles + links + imports + decodes against
   torch 2.6 (cp311, FFmpeg 7). Decoded `nasa_13013.mp4` → `[3, 270, 480] uint8`.
   Toolchain: CUDA 12.3 + MSVC 14.39 + Ninja; runtime FFmpeg 7.x shared on PATH.
-- [~] Milestone 2 — NVDEC: build deltas applied (CMake NPP via CUDAToolkit;
-  runtime CUDA/NPP DLL registration). Pending: `ENABLE_CUDA=1` rebuild + `device="cuda"` decode validation.
-- [ ] Milestone 3 — CI producing labeled wheels
+- [x] **Milestone 2 — DONE.** NVDEC GPU decode works: `ENABLE_CUDA=1` build
+  (72/72, warnings only; `CudaDeviceInterface.cpp` compiles clean against torch
+  2.6) links `CUDA::nppicc/nppig/nppc`+`cudart`; FFmpeg n7.1.5 (`h264_cuvid`) +
+  CUDA 12.3 NPP DLLs resolve at runtime. `VideoDecoder('...mp4', device='cuda')[0]`
+  → `torch.Size([3, 270, 480]) torch.uint8 cuda:0`.
+- [ ] Milestone 3 — CI producing labeled wheels (optional)
+- [ ] Distributable wheel for deployment into the ComfyUI/torch-2.6 env
