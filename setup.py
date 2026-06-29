@@ -126,6 +126,18 @@ class CMakeBuild(build_ext):
             f"-DTORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR={torchcodec_disable_compile_warning_as_error}",
         ]
 
+        if sys.platform == "win32":
+            # Use Ninja on Windows instead of the default Visual Studio (MSBuild)
+            # generator. MSBuild always selects the *newest* installed MSVC
+            # toolset, ignoring the active shell environment; Ninja honors the
+            # `cl.exe` that's active in the shell. This lets us pin an older MSVC
+            # toolset (via `vcvarsall.bat -vcvars_ver=...`) that is compatible
+            # with the installed CUDA toolkit -- recent MSVC STL headers hard-block
+            # CUDA < 12.4 (error STL1002), and torch's `+cuXXX` CMake forces
+            # enable_language(CUDA) even for CPU-only builds. Requires `ninja` on
+            # PATH (installed in the build venv).
+            cmake_args += ["-G", "Ninja"]
+
         self.build_temp = os.getenv("TORCHCODEC_CMAKE_BUILD_DIR", self.build_temp)
         print(f"Using {self.build_temp = }", flush=True)
         Path(self.build_temp).mkdir(parents=True, exist_ok=True)

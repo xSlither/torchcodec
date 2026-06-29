@@ -95,11 +95,15 @@ already builds CPU on Windows; the only variable is torch 2.6 vs 2.8.
   Tools Command Prompt for VS 2022".
 - **`uv`** — creates the venv and installs everything into it (torch, cmake,
   ninja, pybind11, build).
-- **CUDA Toolkit 12.4, active** — required even for the *CPU* build: torch
-  `2.6.0+cu124`'s CMake forces `enable_language(CUDA)`, so CMake must find a
-  working `nvcc`. It must be **≥ 12.4** because recent MSVC (≥ 14.44 / VS 17.14)
-  STL hard-blocks older CUDA (`STL1002: expected CUDA 12.4 or newer`). Make 12.4
-  the active toolkit before building (see Troubleshooting §8).
+- **A CUDA Toolkit + a matching MSVC toolset** — a working `nvcc` is required
+  even for the *CPU* build, because torch `2.6.0+cu124`'s CMake forces
+  `enable_language(CUDA)`. You do **not** need CUDA 12.4: building with an older
+  CUDA (e.g. **12.3**) is runtime-compatible with cu124 torch wheels (CUDA 12.x
+  minor-version compatibility; torch doesn't use NPP, so no conflict). The catch
+  is the **MSVC toolset must be old enough for your CUDA** — recent MSVC STL
+  (~14.40+) hard-blocks CUDA < 12.4 (`STL1002`). For CUDA 12.3, build under MSVC
+  **14.39** (VS 17.9) via `vcvarsall -vcvars_ver=14.39` + the Ninja generator
+  (see Troubleshooting §7).
 - **FFmpeg "shared" dev libraries.** Two options:
   - *Simple (single FFmpeg, pkg-config path):* download an FFmpeg **shared**
     build that includes `lib/pkgconfig/*.pc` + headers (e.g. BtbN
@@ -277,19 +281,28 @@ _None yet — to be filled in as Milestone 1/2 surface any._
 
 ### `STL1002: Unexpected compiler version, expected CUDA 12.4 or newer`
 Configure fails inside *PyTorch's* CMake (`TorchConfig → Caffe2 → cuda.cmake →
-enable_language(CUDA)`), not in torchcodec. Root cause: torch `+cu124` forces the
-CUDA language on, CMake picked up an **older CUDA (e.g. 12.3)**, and a recent
-MSVC STL (≥ 14.44) requires CUDA ≥ 12.4. Fix: make **CUDA 12.4** the active
-toolkit *before* building —
-```powershell
-$cuda = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4"
-$env:CUDA_PATH = $cuda; $env:CUDACXX = "$cuda\bin\nvcc.exe"
-$env:Path = "$cuda\bin;$cuda\libnvvp;$env:Path"
-nvcc --version   # confirm 12.4
-```
-If CUDA 12.4 + a *very* new MSVC still fights (CUDA 12.4 officially supports up
-to VS 17.9), install the **MSVC v143 14.39** toolset via the VS Installer and
-build from its dev prompt (or set `VCToolsVersion=14.39`).
+enable_language(CUDA)`), not in torchcodec — torch `+cu124` forces the CUDA
+language on, so an `nvcc` + host-compiler pair must work even for the CPU build.
+The error is an **MSVC STL guard**: recent MSVC toolsets (~14.40+) hard-block
+CUDA < 12.4. It is **not** a real torch/CUDA incompatibility, and you do **not**
+need to install CUDA 12.4 — building with your installed CUDA (e.g. 12.3) is
+runtime-compatible with cu124 torch wheels. Fix = build with an MSVC toolset from
+that CUDA's era:
+
+1. **Ninja generator** (already wired into `setup.py` for win32). This is
+   essential: the Visual Studio/MSBuild generator ignores the shell environment
+   and always uses the newest installed toolset (e.g. 14.44), re-triggering the
+   guard. Ninja uses whatever `cl.exe` is active in the shell. Requires `ninja`
+   on PATH (it's in the build venv).
+2. **Pin an older toolset** before building (add "MSVC v143 14.39" in the VS
+   Installer if absent), keeping nvcc 12.3:
+   ```bat
+   "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 -vcvars_ver=14.39
+   cl              :: should report 19.39.x
+   nvcc --version  :: still 12.3 -- fine
+   ```
+If 14.39 still trips the guard, step down to 14.38. If CMake's Ninja+CUDA pairing
+can't find the host compiler, set `CUDAHOSTCXX` to the active `cl.exe`.
 
 ### CMake 4.x / pybind11 3.x
 Pin `cmake<4` to match TorchCodec CI and avoid CMake-4 policy breakage in older
