@@ -330,6 +330,15 @@ gyan.dev `7.1 ...-shared` archive — confirm `bin\avcodec-61.dll` exists, and p
 its `bin\` on `PATH`. The `gpl-shared` n7.x build also carries NVDEC/cuvid for
 Milestone 2.
 
+**Important (Windows DLL search):** putting FFmpeg on `PATH` is *not* sufficient
+on Python 3.8+ — `ctypes` (used by `torch.ops.load_library`) resolves a DLL's
+dependencies only through directories registered with `os.add_dll_directory()`,
+not `PATH`. The fork handles this in `_core/ops.py::_maybe_add_ffmpeg_dll_directories()`,
+which registers FFmpeg dirs found on `PATH` (and `CONDA_PREFIX\Library\bin`, and an
+explicit `TORCHCODEC_FFMPEG_DIR` override) before loading. So after this fix,
+FFmpeg-on-PATH works; if you keep FFmpeg elsewhere, set `TORCHCODEC_FFMPEG_DIR` to
+its `bin\`.
+
 ### CMake 4.x / pybind11 3.x
 Pin `cmake<4` to match TorchCodec CI and avoid CMake-4 policy breakage in older
 torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmakedir`.

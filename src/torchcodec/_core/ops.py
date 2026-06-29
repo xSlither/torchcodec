@@ -6,6 +6,8 @@
 
 import io
 import json
+import os
+import sys
 import warnings
 from types import ModuleType
 from typing import List, Optional, Tuple, Union
@@ -22,7 +24,59 @@ from torchcodec._internally_replaced_utils import (  # @manual=//pytorch/torchco
 _pybind_ops: Optional[ModuleType] = None
 
 
+def _maybe_add_ffmpeg_dll_directories() -> None:
+    # On Windows + Python 3.8+, the dependencies of a DLL loaded via ctypes
+    # (which is how torch.ops.load_library loads our core libraries) are NOT
+    # resolved through the PATH environment variable -- only through directories
+    # registered with os.add_dll_directory(). Our core libraries depend on the
+    # FFmpeg shared DLLs (avutil-*.dll, avcodec-*.dll, ...), so simply having
+    # FFmpeg on PATH is not enough; we must register its directory explicitly.
+    #
+    # We register an explicit override (TORCHCODEC_FFMPEG_DIR), a conda
+    # Library/bin if present, and any directory on PATH that actually contains
+    # FFmpeg DLLs. Restricting to dirs that hold FFmpeg DLLs keeps the added
+    # search set minimal and avoids surprises.
+    if sys.platform not in ("win32", "cygwin"):
+        return
+
+    candidates = []
+    explicit = os.environ.get("TORCHCODEC_FFMPEG_DIR")
+    if explicit:
+        candidates.append(explicit)
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        candidates.append(os.path.join(conda_prefix, "Library", "bin"))
+    candidates.extend(os.environ.get("PATH", "").split(os.pathsep))
+
+    seen = set()
+    for directory in candidates:
+        if not directory:
+            continue
+        directory = os.path.normpath(directory)
+        if directory in seen:
+            continue
+        seen.add(directory)
+        try:
+            entries = os.listdir(directory)
+        except OSError:
+            continue
+        has_ffmpeg_dll = any(
+            entry.lower().endswith(".dll")
+            and entry.lower().startswith(("avutil-", "avcodec-", "avformat-"))
+            for entry in entries
+        )
+        if has_ffmpeg_dll:
+            try:
+                os.add_dll_directory(directory)
+            except OSError:
+                pass
+
+
 def load_torchcodec_shared_libraries():
+    # Make the FFmpeg shared DLLs discoverable on Windows before we try to load
+    # our core libraries (which depend on them). No-op on other platforms.
+    _maybe_add_ffmpeg_dll_directories()
+
     # Successively try to load the shared libraries for each version of FFmpeg
     # that we support. We always start with the highest version, working our way
     # down to the lowest version. Once we can load ALL shared libraries for a
