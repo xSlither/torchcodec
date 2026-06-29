@@ -413,6 +413,13 @@ torch CMake modules. pybind11 3.x resolves fine via `python -m pybind11 --cmaked
   multi-stream / keeping frames on-GPU; this is overhead-bound, not a fallback.)
 - [x] Plain wheel built: `torchcodec-0.7.0+cu124.torch26-cp311-cp311-win_amd64.whl`.
 - [x] NPP-bundling implemented (`TORCHCODEC_BUNDLE_CUDA_DLLS=1`) for self-contained wheels.
-- [ ] Validate bundled wheel imports with no CUDA toolkit / NPP on PATH; deploy into ComfyUI (cp311).
-- [ ] Tag fork commit + GitHub Release hosting the `.whl`.
-- [ ] Milestone 3 — CI producing labeled wheels (optional).
+- [x] Bundled wheel verified self-contained: GPU-decoded (`cuda:0`) in a
+  separate embedded Python (Krita AI-diffusion server) with **no CUDA toolkit**
+  installed — NPP resolved from inside the wheel.
+- [x] Milestone 3 — CI: `windows_torch26_wheel.yaml` added (manual
+  `workflow_dispatch`; CUDA 12.4 + bundled NPP + CPU smoke test). First cut,
+  validate on first run.
+- [x] Release notes prepared: `RELEASE_NOTES_v0.7.0-cu124-torch26-win.md`.
+- [ ] Publish GitHub Release (web UI: creates the `v0.7.0-cu124-torch26-win` tag
+  on the branch + upload the `.whl`) — the git proxy here blocks tag pushes, so
+  this is a manual step.
