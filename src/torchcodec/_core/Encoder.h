@@ -1,8 +1,15 @@
 #pragma once
 #include <torch/types.h>
-#include "src/torchcodec/_core/AVIOContextHolder.h"
-#include "src/torchcodec/_core/FFMPEGCommon.h"
-#include "src/torchcodec/_core/StreamOptions.h"
+#include <map>
+#include <string>
+#include "AVIOContextHolder.h"
+#include "DeviceInterface.h"
+#include "FFMPEGCommon.h"
+#include "StreamOptions.h"
+
+extern "C" {
+#include <libavutil/dict.h>
+}
 
 namespace facebook::torchcodec {
 class AudioEncoder {
@@ -36,7 +43,6 @@ class AudioEncoder {
   void encodeFrame(AutoAVPacket& autoAVPacket, const UniqueAVFrame& avFrame);
   void maybeFlushSwrBuffers(AutoAVPacket& autoAVPacket);
   void flushBuffers();
-  void close_avio();
 
   UniqueEncodingAVFormatContext avFormatContext_;
   UniqueAVCodecContext avCodecContext_;
@@ -57,7 +63,6 @@ class AudioEncoder {
   bool encodeWasCalled_ = false;
   int64_t lastEncodedAVFramePts_ = 0;
 };
-} // namespace facebook::torchcodec
 
 /* clang-format off */
 //
@@ -121,3 +126,67 @@ class AudioEncoder {
 //
 //
 /* clang-format on */
+
+class VideoEncoder {
+ public:
+  ~VideoEncoder();
+
+  // Rule of Five requires that we define copy and move
+  // constructors and assignment operators.
+  // Both are deleted because we have unique_ptr members
+  VideoEncoder(const VideoEncoder&) = delete;
+  VideoEncoder& operator=(const VideoEncoder&) = delete;
+
+  // Move operators deleted since UniqueAVDictionary member is not movable
+  VideoEncoder(VideoEncoder&&) = delete;
+  VideoEncoder& operator=(VideoEncoder&&) = delete;
+
+  VideoEncoder(
+      const torch::Tensor& frames,
+      double frameRate,
+      std::string_view fileName,
+      const VideoStreamOptions& videoStreamOptions);
+
+  VideoEncoder(
+      const torch::Tensor& frames,
+      double frameRate,
+      std::string_view formatName,
+      std::unique_ptr<AVIOContextHolder> avioContextHolder,
+      const VideoStreamOptions& videoStreamOptions);
+
+  void encode();
+
+  torch::Tensor encodeToTensor();
+
+ private:
+  void initializeEncoder(const VideoStreamOptions& videoStreamOptions);
+  UniqueAVFrame convertTensorToAVFrame(
+      const torch::Tensor& frame,
+      int frameIndex);
+  void encodeFrame(AutoAVPacket& autoAVPacket, const UniqueAVFrame& avFrame);
+  void flushBuffers();
+
+  UniqueEncodingAVFormatContext avFormatContext_;
+  UniqueAVCodecContext avCodecContext_;
+  AVStream* avStream_ = nullptr;
+  UniqueSwsContext swsContext_;
+
+  const torch::Tensor frames_;
+  double inFrameRate_;
+
+  int inWidth_ = -1;
+  int inHeight_ = -1;
+  AVPixelFormat inPixelFormat_ = AV_PIX_FMT_NONE;
+
+  int outWidth_ = -1;
+  int outHeight_ = -1;
+  AVPixelFormat outPixelFormat_ = AV_PIX_FMT_NONE;
+
+  std::unique_ptr<AVIOContextHolder> avioContextHolder_;
+  std::unique_ptr<DeviceInterface> deviceInterface_;
+
+  bool encodeWasCalled_ = false;
+  UniqueAVDictionary avFormatOptions_;
+};
+
+} // namespace facebook::torchcodec

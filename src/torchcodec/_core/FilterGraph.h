@@ -6,8 +6,8 @@
 
 #pragma once
 
-#include "src/torchcodec/_core/FFMPEGCommon.h"
-#include "src/torchcodec/_core/StreamOptions.h"
+#include "FFMPEGCommon.h"
+#include "StreamOptions.h"
 
 namespace facebook::torchcodec {
 
@@ -19,10 +19,24 @@ struct FiltersContext {
   int outputWidth = 0;
   int outputHeight = 0;
   AVPixelFormat outputFormat = AV_PIX_FMT_NONE;
-
   std::string filtergraphStr;
   AVRational timeBase = {0, 0};
   UniqueAVBufferRef hwFramesCtx;
+
+  FiltersContext() = default;
+  FiltersContext(FiltersContext&&) = default;
+  FiltersContext& operator=(FiltersContext&&) = default;
+  FiltersContext(
+      int inputWidth,
+      int inputHeight,
+      AVPixelFormat inputFormat,
+      AVRational inputAspectRatio,
+      int outputWidth,
+      int outputHeight,
+      AVPixelFormat outputFormat,
+      const std::string& filtergraphStr,
+      AVRational timeBase,
+      AVBufferRef* hwFramesCtx = nullptr);
 
   bool operator==(const FiltersContext&) const;
   bool operator!=(const FiltersContext&) const;

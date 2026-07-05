@@ -4,14 +4,12 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-import contextlib
 import io
 import os
 from functools import partial
 
 os.environ["TORCH_LOGS"] = "output_code"
 import json
-import subprocess
 
 import numpy as np
 import pytest
@@ -44,13 +42,16 @@ from torchcodec._core import (
 from .utils import (
     all_supported_devices,
     assert_frames_equal,
+    get_python_version,
     NASA_AUDIO,
     NASA_AUDIO_MP3,
     NASA_VIDEO,
     needs_cuda,
+    needs_ffmpeg_cli,
     SINE_MONO_S32,
     SINE_MONO_S32_44100,
     SINE_MONO_S32_8000,
+    unsplit_device_str,
 )
 
 torch._dynamo.config.capture_dynamic_output_shape_ops = True
@@ -62,7 +63,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_seek_and_next(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         frame0, _, _ = get_next_frame(decoder)
         reference_frame0 = NASA_VIDEO.get_frame_data_by_index(0)
         assert_frames_equal(frame0, reference_frame0.to(device))
@@ -79,7 +81,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_seek_to_negative_pts(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         frame0, _, _ = get_next_frame(decoder)
         reference_frame0 = NASA_VIDEO.get_frame_data_by_index(0)
         assert_frames_equal(frame0, reference_frame0.to(device))
@@ -91,7 +94,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frame_at_pts(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         # This frame has pts=6.006 and duration=0.033367, so it should be visible
         # at timestamps in the range [6.006, 6.039367) (not including the last timestamp).
         frame6, _, _ = get_frame_at_pts(decoder, 6.006)
@@ -115,7 +119,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frame_at_index(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         frame0, _, _ = get_frame_at_index(decoder, frame_index=0)
         reference_frame0 = NASA_VIDEO.get_frame_data_by_index(0)
         assert_frames_equal(frame0, reference_frame0.to(device))
@@ -133,7 +138,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frame_with_info_at_index(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         frame6, pts, duration = get_frame_at_index(decoder, frame_index=180)
         reference_frame6 = NASA_VIDEO.get_frame_data_by_index(
             INDEX_OF_FRAME_AT_6_SECONDS
@@ -145,7 +151,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frames_at_indices(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         frames0and180, *_ = get_frames_at_indices(decoder, frame_indices=[0, 180])
         reference_frame0 = NASA_VIDEO.get_frame_data_by_index(0)
         reference_frame180 = NASA_VIDEO.get_frame_data_by_index(
@@ -157,7 +164,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frames_at_indices_unsorted_indices(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        _add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
 
         frame_indices = [2, 0, 1, 0, 2]
 
@@ -184,7 +192,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frames_at_indices_negative_indices(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         frames389and387and1, *_ = get_frames_at_indices(
             decoder, frame_indices=[-1, -3, -389]
         )
@@ -198,7 +207,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frames_at_indices_fail_on_invalid_negative_indices(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         with pytest.raises(
             IndexError,
             match="negative indices must have an absolute value less than the number of frames",
@@ -210,7 +220,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frames_by_pts(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        _add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
 
         # Note: 13.01 should give the last video frame for the NASA video
         timestamps = [2, 0, 1, 0 + 1e-3, 13.01, 2 + 1e-3]
@@ -242,7 +253,8 @@ class TestVideoDecoderOps:
         # APIs exactly where those frames are supposed to start. We assert that
         # we get the expected frame.
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
 
         metadata = get_json_metadata(decoder)
         metadata_dict = json.loads(metadata)
@@ -293,7 +305,8 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_get_frames_in_range(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
 
         # ensure that the degenerate case of a range of size 1 works
         ref_frame0 = NASA_VIDEO.get_frame_data_by_range(0, 1)
@@ -333,11 +346,12 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_throws_exception_at_eof(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
 
         seek_to_pts(decoder, 12.979633)
         last_frame, _, _ = get_next_frame(decoder)
-        reference_last_frame = NASA_VIDEO.get_frame_data_by_index(289)
+        reference_last_frame = NASA_VIDEO.get_frame_data_by_index(389)
         assert_frames_equal(last_frame, reference_last_frame.to(device))
         with pytest.raises(IndexError, match="no more frames"):
             get_next_frame(decoder)
@@ -348,20 +362,27 @@ class TestVideoDecoderOps:
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_throws_exception_if_seek_too_far(self, device):
         decoder = create_from_file(str(NASA_VIDEO.path))
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         # pts=12.979633 is the last frame in the video.
         seek_to_pts(decoder, 12.979633 + 1.0e-4)
         with pytest.raises(IndexError, match="no more frames"):
             get_next_frame(decoder)
 
+    @pytest.mark.skipif(
+        get_python_version() >= (3, 14),
+        reason="torch.compile is not supported on Python 3.14+",
+    )
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_compile_seek_and_next(self, device):
         # TODO_OPEN_ISSUE Scott (T180277797): Get this to work with the inductor stack. Right now
         # compilation fails because it can't handle tensors of size unknown at
         # compile-time.
+        device, device_variant = unsplit_device_str(device)
+
         @torch.compile(fullgraph=True, backend="eager")
         def get_frame1_and_frame_time6(decoder):
-            add_video_stream(decoder, device=device)
+            add_video_stream(decoder, device=device, device_variant=device_variant)
             frame0, _, _ = get_next_frame(decoder)
             seek_to_pts(decoder, 6.0)
             frame_time6, _, _ = get_next_frame(decoder)
@@ -404,7 +425,8 @@ class TestVideoDecoderOps:
         else:
             raise ValueError("Oops, double check the parametrization of this test!")
 
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
         frame0, _, _ = get_next_frame(decoder)
         reference_frame0 = NASA_VIDEO.get_frame_data_by_index(0)
         assert_frames_equal(frame0, reference_frame0.to(device))
@@ -478,41 +500,59 @@ class TestVideoDecoderOps:
             )
             assert pts_is_equal
 
+    @needs_ffmpeg_cli
     def test_seek_mode_custom_frame_mappings_fails(self):
-        decoder = create_from_file(
-            str(NASA_VIDEO.path), seek_mode="custom_frame_mappings"
-        )
         with pytest.raises(
             RuntimeError,
             match="Missing frame mappings when custom_frame_mappings seek mode is set.",
         ):
+            decoder = create_from_file(
+                str(NASA_VIDEO.path), seek_mode="custom_frame_mappings"
+            )
             add_video_stream(decoder, stream_index=0, custom_frame_mappings=None)
 
-        decoder = create_from_file(
-            str(NASA_VIDEO.path), seek_mode="custom_frame_mappings"
-        )
-        different_lengths = (
-            torch.tensor([1, 2, 3]),
-            torch.tensor([1, 2]),
-            torch.tensor([1, 2, 3]),
-        )
+        with pytest.raises(
+            RuntimeError,
+            match="all_frames and duration tensors must be int64 dtype, and is_key_frame tensor must be a bool dtype.",
+        ):
+            decoder = create_from_file(
+                str(NASA_VIDEO.path), seek_mode="custom_frame_mappings"
+            )
+            wrong_types = (
+                torch.tensor([1.1, 2.2, 3.3]),
+                torch.tensor([1, 2]),
+                torch.tensor([1, 2, 3]),
+            )
+            add_video_stream(decoder, stream_index=0, custom_frame_mappings=wrong_types)
+
         with pytest.raises(
             RuntimeError,
             match="all_frames, is_key_frame, and duration from custom_frame_mappings were not same size.",
         ):
+            decoder = create_from_file(
+                str(NASA_VIDEO.path), seek_mode="custom_frame_mappings"
+            )
+            different_lengths = (
+                torch.tensor([1, 2, 3]),
+                torch.tensor([False, False]),
+                torch.tensor([1, 2, 3]),
+            )
             add_video_stream(
                 decoder, stream_index=0, custom_frame_mappings=different_lengths
             )
 
+    @needs_ffmpeg_cli
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_seek_mode_custom_frame_mappings(self, device):
         stream_index = 3  # custom_frame_index seek mode requires a stream index
         decoder = create_from_file(
             str(NASA_VIDEO.path), seek_mode="custom_frame_mappings"
         )
+        device, device_variant = unsplit_device_str(device)
         add_video_stream(
             decoder,
             device=device,
+            device_variant=device_variant,
             stream_index=stream_index,
             custom_frame_mappings=NASA_VIDEO.get_custom_frame_mappings(
                 stream_index=stream_index
@@ -558,49 +598,6 @@ class TestVideoDecoderOps:
         )
         assert_frames_equal(frame_time6, reference_frame_time6)
 
-    # We choose arbitrary values for width and height scaling to get better
-    # test coverage. Some pairs upscale the image while others downscale it.
-    @pytest.mark.parametrize(
-        "width_scaling_factor,height_scaling_factor",
-        ((1.31, 1.5), (0.71, 0.5), (1.31, 0.7), (0.71, 1.5), (1.0, 1.0)),
-    )
-    @pytest.mark.parametrize("input_video", [NASA_VIDEO])
-    def test_color_conversion_library_with_scaling(
-        self, input_video, width_scaling_factor, height_scaling_factor
-    ):
-        decoder = create_from_file(str(input_video.path))
-        add_video_stream(decoder)
-        metadata = get_json_metadata(decoder)
-        metadata_dict = json.loads(metadata)
-        assert metadata_dict["width"] == input_video.width
-        assert metadata_dict["height"] == input_video.height
-
-        target_height = int(input_video.height * height_scaling_factor)
-        target_width = int(input_video.width * width_scaling_factor)
-        if width_scaling_factor != 1.0:
-            assert target_width != input_video.width
-        if height_scaling_factor != 1.0:
-            assert target_height != input_video.height
-
-        filtergraph_decoder = create_from_file(str(input_video.path))
-        _add_video_stream(
-            filtergraph_decoder,
-            width=target_width,
-            height=target_height,
-            color_conversion_library="filtergraph",
-        )
-        filtergraph_frame0, _, _ = get_next_frame(filtergraph_decoder)
-
-        swscale_decoder = create_from_file(str(input_video.path))
-        _add_video_stream(
-            swscale_decoder,
-            width=target_width,
-            height=target_height,
-            color_conversion_library="swscale",
-        )
-        swscale_frame0, _, _ = get_next_frame(swscale_decoder)
-        assert_frames_equal(filtergraph_frame0, swscale_frame0)
-
     @pytest.mark.parametrize("dimension_order", ("NHWC", "NCHW"))
     @pytest.mark.parametrize("color_conversion_library", ("filtergraph", "swscale"))
     def test_color_conversion_library_with_dimension_order(
@@ -639,88 +636,6 @@ class TestVideoDecoderOps:
         frames, *_ = get_frames_at_indices(decoder, frame_indices=[0, 1, 3, 4])
         assert frames.shape[1:] == expected_shape
         assert_frames_equal(frames[0], frame0_ref)
-
-    @pytest.mark.parametrize(
-        "width_scaling_factor,height_scaling_factor",
-        ((1.31, 1.5), (0.71, 0.5), (1.31, 0.7), (0.71, 1.5), (1.0, 1.0)),
-    )
-    @pytest.mark.parametrize("width", [30, 32, 300])
-    @pytest.mark.parametrize("height", [128])
-    def test_color_conversion_library_with_generated_videos(
-        self, tmp_path, width, height, width_scaling_factor, height_scaling_factor
-    ):
-
-        # We consider filtergraph to be the reference color conversion library.
-        # However the video decoder sometimes uses swscale as that is faster.
-        # The exact color conversion library used is an implementation detail
-        # of the video decoder and depends on the video's width.
-        #
-        # In this test we compare the output of filtergraph (which is the
-        # reference) with the output of the video decoder (which may use
-        # swscale if it chooses for certain video widths) to make sure they are
-        # always the same.
-        video_path = f"{tmp_path}/frame_numbers_{width}x{height}.mp4"
-        # We don't specify a particular encoder because the ffmpeg binary could
-        # be configured with different encoders. For the purposes of this test,
-        # the actual encoder is irrelevant.
-        with contextlib.ExitStack() as stack:
-            ffmpeg_cli = "ffmpeg"
-
-            if os.environ.get("IN_FBCODE_TORCHCODEC") == "1":
-                import importlib.resources
-
-                ffmpeg_cli = stack.enter_context(
-                    importlib.resources.path(__package__, "ffmpeg")
-                )
-
-            command = [
-                ffmpeg_cli,
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=blue",
-                "-pix_fmt",
-                "yuv420p",
-                "-s",
-                f"{width}x{height}",
-                "-frames:v",
-                "1",
-                video_path,
-            ]
-            subprocess.check_call(command)
-
-        decoder = create_from_file(str(video_path))
-        add_video_stream(decoder)
-        metadata = get_json_metadata(decoder)
-        metadata_dict = json.loads(metadata)
-        assert metadata_dict["width"] == width
-        assert metadata_dict["height"] == height
-
-        target_height = int(height * height_scaling_factor)
-        target_width = int(width * width_scaling_factor)
-        if width_scaling_factor != 1.0:
-            assert target_width != width
-        if height_scaling_factor != 1.0:
-            assert target_height != height
-
-        filtergraph_decoder = create_from_file(str(video_path))
-        _add_video_stream(
-            filtergraph_decoder,
-            width=target_width,
-            height=target_height,
-            color_conversion_library="filtergraph",
-        )
-        filtergraph_frame0, _, _ = get_next_frame(filtergraph_decoder)
-
-        auto_decoder = create_from_file(str(video_path))
-        add_video_stream(
-            auto_decoder,
-            width=target_width,
-            height=target_height,
-        )
-        auto_frame0, _, _ = get_next_frame(auto_decoder)
-        assert_frames_equal(filtergraph_frame0, auto_frame0)
 
     @needs_cuda
     def test_cuda_decoder(self):
@@ -1041,7 +956,8 @@ class TestAudioDecoderOps:
             open(NASA_VIDEO.path, mode="rb", buffering=buffering)
         )
         decoder = create_from_file_like(file_counter, "approximate")
-        add_video_stream(decoder, device=device)
+        device, device_variant = unsplit_device_str(device)
+        add_video_stream(decoder, device=device, device_variant=device_variant)
 
         frame0, *_ = get_next_frame(decoder)
         reference_frame0 = NASA_VIDEO.get_frame_data_by_index(0)
@@ -1059,7 +975,7 @@ class TestAudioDecoderOps:
         seek_to_pts(decoder, 12.979633)
 
         frame_last, *_ = get_next_frame(decoder)
-        reference_frame_last = NASA_VIDEO.get_frame_data_by_index(289)
+        reference_frame_last = NASA_VIDEO.get_frame_data_by_index(389)
         assert_frames_equal(frame_last, reference_frame_last.to(device))
 
         assert file_counter.num_seeks > initialization_seeks
@@ -1089,7 +1005,7 @@ class TestAudioDecoderOps:
 
         class SeekMethodMissing:
             def read(self, size: int) -> bytes:
-                return bytes()
+                return b""
 
         with pytest.raises(RuntimeError, match="must implement a seek method"):
             create_from_file_like(SeekMethodMissing(), "approximate")
@@ -1100,7 +1016,7 @@ class TestAudioDecoderOps:
 
             # io.RawIOBase says we should accept a single int; wrong signature on purpose
             def read(self) -> bytes:
-                return bytes()
+                return b""
 
             def seek(self, offset: int, whence: int) -> int:
                 return self._file.seeK(offset, whence)
@@ -1183,7 +1099,7 @@ class TestAudioDecoderOps:
         torch.manual_seed(0)
         indices = torch.randint(
             0, len(NASA_VIDEO.frames[NASA_VIDEO.default_stream_index]), size=(50,)
-        ).tolist()
+        )
 
         frames_file_like, *_ = get_frames_at_indices(
             decoder_file_like, frame_indices=indices

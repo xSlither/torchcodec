@@ -55,6 +55,7 @@ extensions = [
     "sphinx_tabs.tabs",
     "sphinx_design",
     "sphinx_copybutton",
+    "sphinx_sitemap",
 ]
 
 
@@ -81,11 +82,15 @@ class CustomGalleryExampleSortKey:
                 "approximate_mode.py",
                 "sampling.py",
                 "parallel_decoding.py",
+                "performance_tips.py",
+                "custom_frame_mappings.py",
+                "transforms.py",
             ]
         else:
             assert "examples/encoding" in self.src_dir
             order = [
                 "audio_encoding.py",
+                "video_encoding.py",
             ]
 
         try:
@@ -208,10 +213,20 @@ autosummary_generate = True
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3/", None),
     "torch": ("https://pytorch.org/docs/stable/", None),
+    "torchvision": ("https://docs.pytorch.org/vision/stable/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
     "PIL": ("https://pillow.readthedocs.io/en/stable/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
 }
+
+# sitemap config
+html_baseurl = "https://meta-pytorch.org/torchcodec/stable/"
+sitemap_locales = [None]
+sitemap_excludes = [
+    "search.html",
+    "genindex.html",
+]
+sitemap_url_scheme = "{link}"
 
 
 def inject_minigalleries(app, what, name, obj, options, lines):

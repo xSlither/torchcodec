@@ -116,6 +116,9 @@ class CMakeBuild(build_ext):
         torchcodec_disable_compile_warning_as_error = os.environ.get(
             "TORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR", "OFF"
         )
+        torchcodec_disable_homebrew_rpath = os.environ.get(
+            "TORCHCODEC_DISABLE_HOMEBREW_RPATH", "OFF"
+        )
         python_version = sys.version_info
         cmake_args = [
             f"-DCMAKE_INSTALL_PREFIX={self._install_prefix}",
@@ -125,6 +128,7 @@ class CMakeBuild(build_ext):
             f"-DPYTHON_VERSION={python_version.major}.{python_version.minor}",
             f"-DENABLE_CUDA={enable_cuda}",
             f"-DTORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR={torchcodec_disable_compile_warning_as_error}",
+            f"-DTORCHCODEC_DISABLE_HOMEBREW_RPATH={torchcodec_disable_homebrew_rpath}",
         ]
 
         if sys.platform == "win32":

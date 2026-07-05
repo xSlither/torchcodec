@@ -12,6 +12,7 @@
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersrc.h>
 #include <libavformat/avformat.h>
@@ -70,6 +71,14 @@ using UniqueEncodingAVFormatContext = std::unique_ptr<
 using UniqueAVCodecContext = std::unique_ptr<
     AVCodecContext,
     Deleterp<AVCodecContext, void, avcodec_free_context>>;
+using SharedAVCodecContext = std::shared_ptr<AVCodecContext>;
+
+// create SharedAVCodecContext with custom deleter
+inline SharedAVCodecContext makeSharedAVCodecContext(AVCodecContext* ctx) {
+  return SharedAVCodecContext(
+      ctx, Deleterp<AVCodecContext, void, avcodec_free_context>{});
+}
+
 using UniqueAVFrame =
     std::unique_ptr<AVFrame, Deleterp<AVFrame, void, av_frame_free>>;
 using UniqueAVFilterGraph = std::unique_ptr<
@@ -86,11 +95,46 @@ using UniqueSwrContext =
     std::unique_ptr<SwrContext, Deleterp<SwrContext, void, swr_free>>;
 using UniqueAVAudioFifo = std::
     unique_ptr<AVAudioFifo, Deleter<AVAudioFifo, void, av_audio_fifo_free>>;
+using UniqueAVBSFContext =
+    std::unique_ptr<AVBSFContext, Deleterp<AVBSFContext, void, av_bsf_free>>;
 using UniqueAVBufferRef =
     std::unique_ptr<AVBufferRef, Deleterp<AVBufferRef, void, av_buffer_unref>>;
 using UniqueAVBufferSrcParameters = std::unique_ptr<
     AVBufferSrcParameters,
     Deleterv<AVBufferSrcParameters, void, av_freep>>;
+
+// Wrapper class for AVDictionary, similar to unique_ptr, to support FFmpeg's
+// functions that require a double-pointer to AVDictionary, such as av_dict_set.
+// https://ffmpeg.org/doxygen/trunk/group__lavu__dict.html#ga8d9c2de72b310cef8e6a28c9cd3acbbe
+class UniqueAVDictionary {
+ private:
+  AVDictionary* dict_ = nullptr;
+
+ public:
+  UniqueAVDictionary() = default;
+
+  ~UniqueAVDictionary() {
+    if (dict_) {
+      av_dict_free(&dict_);
+    }
+  }
+
+  // Explicitly delete copy operator similar to unique_ptr
+  UniqueAVDictionary(const UniqueAVDictionary&) = delete;
+  UniqueAVDictionary& operator=(const UniqueAVDictionary&) = delete;
+  // Explicitly delete move operator, as it is not needed at this time.
+  UniqueAVDictionary(UniqueAVDictionary&&) = delete;
+  UniqueAVDictionary& operator=(UniqueAVDictionary&&) = delete;
+
+  // FFmpeg's AVDictionary functions require a AVDictionary** argument.
+  // However, unique_ptr's get() function returns a **temporary** pointer to the
+  // object, so we cannot get a pointer to the internal AVDictionary pointer.
+  // As a result, we implement getAddress() to return a pointer to the internal
+  // AVDictionary pointer.
+  AVDictionary** getAddress() {
+    return &dict_;
+  }
+};
 
 // These 2 classes share the same underlying AVPacket object. They are meant to
 // be used in tandem, like so:
@@ -161,9 +205,15 @@ std::string getFFMPEGErrorStringFromErrorCode(int errorCode);
 // struct member representing duration has changed across the versions we
 // support.
 int64_t getDuration(const UniqueAVFrame& frame);
+void setDuration(const UniqueAVFrame& frame, int64_t duration);
+
+const int* getSupportedSampleRates(const AVCodec& avCodec);
+const AVSampleFormat* getSupportedOutputSampleFormats(const AVCodec& avCodec);
+const AVPixelFormat* getSupportedPixelFormats(const AVCodec& avCodec);
 
 int getNumChannels(const UniqueAVFrame& avFrame);
-int getNumChannels(const UniqueAVCodecContext& avCodecContext);
+int getNumChannels(const SharedAVCodecContext& avCodecContext);
+int getNumChannels(const AVCodecParameters* codecpar);
 
 void setDefaultChannelLayout(
     UniqueAVCodecContext& avCodecContext,
@@ -223,5 +273,42 @@ AVIOContext* avioAllocContext(
     AVIOReadFunction read_packet,
     AVIOWriteFunction write_packet,
     AVIOSeekFunction seek);
+
+double ptsToSeconds(int64_t pts, const AVRational& timeBase);
+int64_t secondsToClosestPts(double seconds, const AVRational& timeBase);
+int64_t computeSafeDuration(
+    const AVRational& frameRate,
+    const AVRational& timeBase);
+
+AVFilterContext* createAVFilterContextWithOptions(
+    AVFilterGraph* filterGraph,
+    const AVFilter* buffer,
+    const enum AVPixelFormat outputFormat);
+
+struct SwsFrameContext {
+  int inputWidth = 0;
+  int inputHeight = 0;
+  AVPixelFormat inputFormat = AV_PIX_FMT_NONE;
+  int outputWidth = 0;
+  int outputHeight = 0;
+
+  SwsFrameContext() = default;
+  SwsFrameContext(
+      int inputWidth,
+      int inputHeight,
+      AVPixelFormat inputFormat,
+      int outputWidth,
+      int outputHeight);
+
+  bool operator==(const SwsFrameContext& other) const;
+  bool operator!=(const SwsFrameContext& other) const;
+};
+
+// Utility functions for swscale context management
+UniqueSwsContext createSwsContext(
+    const SwsFrameContext& swsFrameContext,
+    AVColorSpace colorspace,
+    AVPixelFormat outputFormat,
+    int swsFlags);
 
 } // namespace facebook::torchcodec

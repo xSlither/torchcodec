@@ -4,11 +4,12 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 import abc
 import json
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import torch
 from torch import nn, Tensor
@@ -82,7 +83,7 @@ class TimeBasedSamplerArgs(SamplerArgs):
     sample_start_second: float = 0.0
     sample_end_second: float = float("inf")
     sample_per_second: float = 0.0
-    target_sample_start_second: List[float] = field(default_factory=lambda: [])
+    target_sample_start_second: list[float] = field(default_factory=lambda: [])
 
 
 @dataclass
@@ -105,46 +106,33 @@ class IndexBasedSamplerArgs(SamplerArgs):
     sample_step: int = 1
 
 
-class VideoClipSampler(nn.Module):
+class DEPRECATED_VideoClipSampler(nn.Module):
     """
-    VideoClipSampler will do video clip sampling with given video args and sampler args.
-    The video args contains video related information, frames_per_clip, dimensions etc.
-    The sampler args can be either time-based or index-based, it will be used to decide clip start time pts or index.
-    ClipSampling support, random, uniform, periodic, target, keyframe sampling etc.
+    DEPRECATED: Do not use. The supported samplers are in `torchcodec.samplers`. See:
 
-    Args:
-        video_args (`VideoArgs`): The video args
-        sampler_args (`SamplerArgs`): The sampler args. Can be TimeBasedSamplerArgs or IndexBasedSamplerArgs
-        decoder_args (`DecoderArgs`): Decoder args contain value needs for decoder, for example, thread count
-
-    Example:
-        >>> video_args = VideoArgs(desired_width=224, desired_height=224)
-        >>> time_based_sampler_args = TimeBasedSamplerArgs(sampler_type="random", clips_per_video=1, frames_per_clip=4)
-        >>> video_decoder_args = DecoderArgs(num_threads=1)
-        >>> video_clip_sampler = VideoClipSampler(video_args, time_based_sampler_args, decoder_args)
-        >>> clips = video_clip_sampler(video_data)
-        clips now contains a list of clip, where clip is a list of frame tensors, each tensor represents a frame image.
+      * https://docs.pytorch.org/torchcodec/stable/api_ref_torchcodec.html
+      * https://docs.pytorch.org/torchcodec/stable/generated_examples/decoding/sampling.html
     """
 
     def __init__(
         self,
         video_args: VideoArgs,
         sampler_args: SamplerArgs,
-        decoder_args: Union[None, DecoderArgs] = None,
+        decoder_args: DecoderArgs | None = None,
     ) -> None:
         super().__init__()
         self.video_args = video_args
         self.sampler_args = sampler_args
         self.decoder_args = DecoderArgs() if decoder_args is None else decoder_args
 
-    def forward(self, video_data: Tensor) -> Union[List[Any]]:
+    def forward(self, video_data: Tensor) -> list[Any]:
         """Sample video clips from the video data
 
         Args:
             video_data (`Tensor`): The video data
 
         Return
-            clips (` List[List[Tensor]]`): List of clips, where each clip is a list of Tensors, each tensor represents a frame image.
+            clips (` list[list[Tensor]]`): List of clips, where each clip is a list of Tensors, each tensor represents a frame image.
 
         """
 
@@ -160,12 +148,11 @@ class VideoClipSampler(nn.Module):
         scan_all_streams_to_update_metadata(video_decoder)
         add_video_stream(
             video_decoder,
-            width=target_width,
-            height=target_height,
+            transform_specs=f"resize, {target_height}, {target_width}",
             num_threads=self.decoder_args.num_threads,
         )
 
-        clips: List[Any] = []
+        clips: list[Any] = []
         # Cast sampler args to be time based or index based
         if isinstance(self.sampler_args, TimeBasedSamplerArgs):
             time_based_sampler_args = self.sampler_args
@@ -193,8 +180,8 @@ class VideoClipSampler(nn.Module):
         self,
         video_decoder: Tensor,
         index_based_sampler_args: IndexBasedSamplerArgs,
-        metadata_json: Dict[str, Any],
-    ) -> List[Tensor]:
+        metadata_json: dict[str, Any],
+    ) -> list[Tensor]:
         """Get clips for index based sampling, the sampling is done in 3 steps:
             1. Compute clip_start_idxs based on the sampler type and the sampler args;
             2. For each clip, given clip_start_idx, video_frame_dilation, frames_per_clip, get indexes for all frames
@@ -203,10 +190,10 @@ class VideoClipSampler(nn.Module):
         Args:
             video_decoder (`Tensor`): The video decoder
             index_based_sampler_args (`IndexBasedSamplerArgs`): The index based sampler args
-            metadata_json (`Dict[str, Any]`): The metadata of the video in json format
+            metadata_json (`dict[str, Any]`): The metadata of the video in json format
 
         Returns:
-            clips (` List[Tensor]`): List of clips, where each clip is a Tensor represents list of frames, Tensor shape default is NCHW.
+            clips (` list[Tensor]`): List of clips, where each clip is a Tensor represents list of frames, Tensor shape default is NCHW.
         """
 
         sample_start_index = max(0, index_based_sampler_args.sample_start_index)
@@ -240,6 +227,8 @@ class VideoClipSampler(nn.Module):
                 clip_start_idx + i * index_based_sampler_args.video_frame_dilation
                 for i in range(index_based_sampler_args.frames_per_clip)
             ]
+            # Need torch.stack to convert list[Tensor[int]] into 1D Tensor[int]
+            batch_indexes = torch.stack(batch_indexes)
             frames, *_ = get_frames_at_indices(
                 video_decoder,
                 frame_indices=batch_indexes,
@@ -250,18 +239,18 @@ class VideoClipSampler(nn.Module):
 
     def _get_start_seconds(
         self,
-        metadata_json: Dict[str, Any],
+        metadata_json: dict[str, Any],
         time_based_sampler_args: TimeBasedSamplerArgs,
-    ) -> List[float]:
+    ) -> list[float]:
         """Get start seconds for each clip.
         Given different sampler type, the API returns different clip start seconds.
 
         Args:
-            metadata_json (`Dict[str, Any]`): The metadata of the video in json format
+            metadata_json (`dict[str, Any]`): The metadata of the video in json format
             time_based_sampler_args: (`TimeBasedSamplerArgs`): The time based sampler args
 
         Returns:
-            (`List[float]`): List of the sampled clip start position in seconds
+            (`list[float]`): List of the sampled clip start position in seconds
         """
         video_duration_in_seconds = metadata_json["durationSecondsFromHeader"]
 
@@ -289,7 +278,7 @@ class VideoClipSampler(nn.Module):
                 "Cannot get clips because video duration is shorter than the clip duration!"
             )
         sampler_type = time_based_sampler_args.sampler_type
-        clip_starts_in_seconds: List[float] = []
+        clip_starts_in_seconds: list[float] = []
         sample_start_second = max(
             time_based_sampler_args.sample_start_second,
             beginStreamSecondsFromContent,
@@ -318,7 +307,7 @@ class VideoClipSampler(nn.Module):
 
     def _get_clip_with_start_second(
         self, start_second: float, video_decoder: Tensor, video_frame_dilation: int
-    ) -> List[Tensor]:
+    ) -> list[Tensor]:
         """Get clip with start second.
 
         Args:
@@ -327,7 +316,7 @@ class VideoClipSampler(nn.Module):
             `video_frame_dilation` (`int`): The video frame dilation, by default it's 1.
 
         Returns:
-            `clip` (`List[Tensor]`): clip is list of frame tensor. Dimension of each frame tensor is user specified, by default it's HWC.
+            `clip` (`list[Tensor]`): clip is list of frame tensor. Dimension of each frame tensor is user specified, by default it's HWC.
         """
         seek_to_pts(video_decoder, start_second)
         frames_needed_per_clip = (
@@ -344,7 +333,7 @@ class VideoClipSampler(nn.Module):
 
     def _compute_frame_width_height(
         self, ori_width: int, ori_height: int
-    ) -> Tuple[int, int]:
+    ) -> tuple[int, int]:
         """Compute output frame width and height
         desired_width, desired_height, desired_min_dimension, desired_max_dimension, (`int`): Together decide the size of the decoded video clips. (Default: `0`).
                 Note that the desired_width/desired_height parameters are mutually exclusive with desired_min_dimension/desired_max_dimension parameters.
@@ -376,7 +365,7 @@ class VideoClipSampler(nn.Module):
             ori_height (`int`): Original height of the video
 
         Returns:
-            (`Tuple[int, int]`): output frame width and height
+            (`tuple[int, int]`): output frame width and height
         """
         width_height_ratio = ori_width / ori_height
         height_width_ratio = ori_height / ori_width

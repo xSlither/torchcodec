@@ -12,11 +12,13 @@
 #include <ostream>
 #include <string_view>
 
-#include "src/torchcodec/_core/AVIOContextHolder.h"
-#include "src/torchcodec/_core/DeviceInterface.h"
-#include "src/torchcodec/_core/FFMPEGCommon.h"
-#include "src/torchcodec/_core/Frame.h"
-#include "src/torchcodec/_core/StreamOptions.h"
+#include "AVIOContextHolder.h"
+#include "DeviceInterface.h"
+#include "FFMPEGCommon.h"
+#include "Frame.h"
+#include "Metadata.h"
+#include "StreamOptions.h"
+#include "Transform.h"
 
 namespace facebook::torchcodec {
 
@@ -28,8 +30,6 @@ class SingleStreamDecoder {
   // --------------------------------------------------------------------------
   // CONSTRUCTION API
   // --------------------------------------------------------------------------
-
-  enum class SeekMode { exact, approximate, custom_frame_mappings };
 
   // Creates a SingleStreamDecoder from the video at videoFilePath.
   explicit SingleStreamDecoder(
@@ -59,6 +59,12 @@ class SingleStreamDecoder {
   // Returns the metadata for the container.
   ContainerMetadata getContainerMetadata() const;
 
+  // Returns the seek mode of this decoder.
+  SeekMode getSeekMode() const;
+
+  // Returns the active stream index. Returns -2 if no stream is active.
+  int getActiveStreamIndex() const;
+
   // Returns the key frame indices as a tensor. The tensor is 1D and contains
   // int64 values, where each value is the frame index for a key frame.
   torch::Tensor getKeyFrameIndices();
@@ -83,6 +89,7 @@ class SingleStreamDecoder {
 
   void addVideoStream(
       int streamIndex,
+      std::vector<Transform*>& transforms,
       const VideoStreamOptions& videoStreamOptions = VideoStreamOptions(),
       std::optional<FrameMappings> customFrameMappings = std::nullopt);
   void addAudioStream(
@@ -106,7 +113,7 @@ class SingleStreamDecoder {
 
   // Returns frames at the given indices for a given stream as a single stacked
   // Tensor.
-  FrameBatchOutput getFramesAtIndices(const std::vector<int64_t>& frameIndices);
+  FrameBatchOutput getFramesAtIndices(const torch::Tensor& frameIndices);
 
   // Returns frames within a given range. The range is defined by [start, stop).
   // The values retrieved from the range are: [start, start+step,
@@ -121,7 +128,7 @@ class SingleStreamDecoder {
   // seconds=5.999, etc.
   FrameOutput getFramePlayedAt(double seconds);
 
-  FrameBatchOutput getFramesPlayedAt(const std::vector<double>& timestamps);
+  FrameBatchOutput getFramesPlayedAt(const torch::Tensor& timestamps);
 
   // Returns frames within a given pts range. The range is defined by
   // [startSeconds, stopSeconds) with respect to the pts values for frames. The
@@ -184,6 +191,8 @@ class SingleStreamDecoder {
   DecodeStats getDecodeStats() const;
   void resetDecodeStats();
 
+  std::string getDeviceInterfaceDetails() const;
+
  private:
   // --------------------------------------------------------------------------
   // STREAMINFO AND ASSOCIATED STRUCTS
@@ -219,24 +228,15 @@ class SingleStreamDecoder {
     AVMediaType avMediaType = AVMEDIA_TYPE_UNKNOWN;
 
     AVRational timeBase = {};
-    UniqueAVCodecContext codecContext;
+    SharedAVCodecContext codecContext;
 
     // The FrameInfo indices we built when scanFileAndUpdateMetadataAndIndex was
     // called.
     std::vector<FrameInfo> keyFrames;
     std::vector<FrameInfo> allFrames;
 
-    // TODO since the decoder is single-stream, these should be decoder fields,
-    // not streamInfo fields. And they should be defined right next to
-    // `cursor_`, with joint documentation.
-    int64_t lastDecodedAvFramePts = 0;
-    int64_t lastDecodedAvFrameDuration = 0;
     VideoStreamOptions videoStreamOptions;
     AudioStreamOptions audioStreamOptions;
-
-    // color-conversion fields. Only one of FilterGraphContext and
-    // UniqueSwsContext should be non-null.
-    UniqueSwrContext swrContext;
   };
 
   // --------------------------------------------------------------------------
@@ -278,24 +278,11 @@ class SingleStreamDecoder {
       FrameOutput& frameOutput,
       std::optional<torch::Tensor> preAllocatedOutputTensor = std::nullopt);
 
-  void convertAudioAVFrameToFrameOutputOnCPU(
-      UniqueAVFrame& srcAVFrame,
-      FrameOutput& frameOutput);
-
-  torch::Tensor convertAVFrameToTensorUsingFilterGraph(
-      const UniqueAVFrame& avFrame);
-
-  int convertAVFrameToTensorUsingSwsScale(
-      const UniqueAVFrame& avFrame,
-      torch::Tensor& outputTensor);
-
-  std::optional<torch::Tensor> maybeFlushSwrBuffers();
-
   // --------------------------------------------------------------------------
   // PTS <-> INDEX CONVERSIONS
   // --------------------------------------------------------------------------
 
-  int getKeyFrameIndexForPts(int64_t pts) const;
+  int getKeyFrameIdentifier(int64_t pts) const;
 
   // Returns the key frame index of the presentation timestamp using our index.
   // We build this index by scanning the file in
@@ -318,6 +305,7 @@ class SingleStreamDecoder {
       int streamIndex,
       AVMediaType mediaType,
       const torch::Device& device = torch::kCPU,
+      const std::string_view deviceVariant = "ffmpeg",
       std::optional<int> ffmpegThreadCount = std::nullopt);
 
   // Returns the "best" stream index for a given media type. The "best" is
@@ -328,10 +316,6 @@ class SingleStreamDecoder {
   // Returns the key frame index of the presentation timestamp using FFMPEG's
   // index. Note that this index may be truncated for some files.
   int getBestStreamIndex(AVMediaType mediaType);
-
-  std::optional<int64_t> getNumFrames(const StreamMetadata& streamMetadata);
-  double getMinSeconds(const StreamMetadata& streamMetadata);
-  std::optional<double> getMaxSeconds(const StreamMetadata& streamMetadata);
 
   // --------------------------------------------------------------------------
   // VALIDATION UTILS
@@ -356,16 +340,45 @@ class SingleStreamDecoder {
   const int NO_ACTIVE_STREAM = -2;
   int activeStreamIndex_ = NO_ACTIVE_STREAM;
 
-  bool cursorWasJustSet_ = false;
   // The desired position of the cursor in the stream. We send frames >= this
   // pts to the user when they request a frame.
   int64_t cursor_ = INT64_MIN;
+  bool cursorWasJustSet_ = false;
+  int64_t lastDecodedAvFramePts_ = 0;
+  int64_t lastDecodedAvFrameDuration_ = 0;
+  int64_t lastDecodedFrameIndex_ = INT64_MIN;
+
   // Stores various internal decoding stats.
   DecodeStats decodeStats_;
+
   // Stores the AVIOContext for the input buffer.
   std::unique_ptr<AVIOContextHolder> avioContextHolder_;
+
+  // We will receive a vector of transforms upon adding a stream and store it
+  // here. However, we need to know if any of those operations change the
+  // dimensions of the output frame. If they do, we need to figure out what are
+  // the final dimensions of the output frame after ALL transformations. We
+  // figure this out as soon as we receive the transforms. If any of the
+  // transforms change the final output frame dimensions, we store that in
+  // resizedOutputDims_. If resizedOutputDims_ has no value, that means there
+  // are no transforms that change the output frame dimensions.
+  //
+  // The priority order for output frame dimension is:
+  //
+  // 1. resizedOutputDims_; the resize requested by the user always takes
+  //    priority.
+  // 2. The dimemnsions of the actual decoded AVFrame. This can change
+  //    per-decoded frame, and is unknown in SingleStreamDecoder. Only the
+  //    DeviceInterface learns it immediately after decoding a raw frame but
+  //    before the color transformation.
+  // 3. metdataDims_; the dimensions we learned from the metadata.
+  std::vector<std::unique_ptr<Transform>> transforms_;
+  std::optional<FrameDims> resizedOutputDims_;
+  FrameDims metadataDims_;
+
   // Whether or not we have already scanned all streams to update the metadata.
   bool scannedAllStreams_ = false;
+
   // Tracks that we've already been initialized.
   bool initialized_ = false;
 };
@@ -374,7 +387,5 @@ class SingleStreamDecoder {
 std::ostream& operator<<(
     std::ostream& os,
     const SingleStreamDecoder::DecodeStats& stats);
-
-SingleStreamDecoder::SeekMode seekModeFromString(std::string_view seekMode);
 
 } // namespace facebook::torchcodec

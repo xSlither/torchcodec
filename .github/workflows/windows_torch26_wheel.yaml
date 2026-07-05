@@ -1,15 +1,24 @@
-name: Windows torch-2.6 CUDA wheel
+name: Windows torch-2.6 CUDA wheel (torchcodec 0.10 base)
 
 # Bespoke workflow that builds this fork's torchcodec wheel against a PINNED
 # torch 2.6.0 + cu124 on Windows. (PyTorch's test-infra reusable workflow can't
 # pin to an arbitrary torch version, so we do it by hand.)
 #
+# This branch is based on upstream v0.10.0 (the last "classic" C++17/ATen-ABI
+# release before v0.11 switched the whole core to torch::stable, which does not
+# exist in torch 2.6's headers -- see BUILD_WINDOWS_TORCH26.md). 0.10 already
+# ships VideoEncoder/AudioEncoder (added at 0.9) including CUDA-resident /
+# hardware(NVENC) encode, and a refactored NVDEC path (NVCUVIDRuntimeLoader now
+# loads nvcuvid.dll at RUNTIME via LoadLibrary/GetProcAddress instead of
+# link-time linking, so no NVIDIA Video Codec SDK install is needed at build
+# time -- simpler than the 0.7.0 base this replaces).
+#
 # GitHub-hosted runners have NO GPU, so this job:
 #   - builds the CUDA wheel (NVDEC/NPP compiled in, NPP DLLs bundled), then
-#   - runs a CPU-only import + decode smoke test.
-# NVDEC itself is verified separately on a real GPU box.
+#   - runs a CPU-only import + decode + encode smoke test.
+# NVDEC/NVENC themselves are verified separately on a real GPU box.
 #
-# Trigger manually: Actions tab -> "Windows torch-2.6 CUDA wheel" -> Run workflow.
+# Trigger manually: Actions tab -> "Windows torch-2.6 CUDA wheel (torchcodec 0.10 base)" -> Run workflow.
 #
 # FIRST-CUT NOTES (may need a trial run to tune):
 #   - CUDA 12.4 is used on CI on purpose: its STL floor matches recent MSVC, so
@@ -26,7 +35,7 @@ on:
         default: "3.11"
       build-version:
         description: "BUILD_VERSION stamped into the wheel"
-        default: "0.7.0+cu124.torch26"
+        default: "0.10.0+cu124.torch26"
 
 jobs:
   build:
@@ -77,7 +86,7 @@ jobs:
           $whl = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
           python -c "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); dlls=[n for n in z.namelist() if n.lower().endswith('.dll')]; print(chr(10).join(dlls)); assert any('nppicc' in d.lower() for d in dlls), 'NPP not bundled!'" "$whl"
 
-      - name: CPU import + decode smoke test
+      - name: CPU import + decode + encode smoke test
         shell: pwsh
         run: |
           # No GPU on hosted runners -> CPU path only. Needs FFmpeg 7.x shared.
@@ -90,7 +99,18 @@ jobs:
           pip install "$whl"
           # Remove src/ so the import resolves from the installed wheel, not the tree.
           Remove-Item -Recurse -Force src
-          python -c "import torch, torchcodec; from torchcodec.decoders import VideoDecoder; d=VideoDecoder(r'test/resources/nasa_13013.mp4'); print('torch', torch.__version__, '| torchcodec', torchcodec.__version__); print('frame0', d[0].shape, d[0].dtype)"
+          python -c "
+          import torch, torchcodec
+          from torchcodec.decoders import VideoDecoder
+          from torchcodec.encoders import VideoEncoder
+          print('torch', torch.__version__, '| torchcodec', torchcodec.__version__)
+          d = VideoDecoder(r'test/resources/nasa_13013.mp4')
+          frame0 = d[0]
+          print('decode frame0', frame0.shape, frame0.dtype)
+          frames = d[0:10]
+          VideoEncoder(frames, frame_rate=d.metadata.average_fps).to_file('smoke_encode.mp4')
+          print('encode ok:', VideoDecoder('smoke_encode.mp4').metadata)
+          "
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4

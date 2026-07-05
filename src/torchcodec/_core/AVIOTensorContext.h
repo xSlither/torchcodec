@@ -7,7 +7,7 @@
 #pragma once
 
 #include <torch/types.h>
-#include "src/torchcodec/_core/AVIOContextHolder.h"
+#include "AVIOContextHolder.h"
 
 namespace facebook::torchcodec {
 
@@ -15,7 +15,8 @@ namespace detail {
 
 struct TensorContext {
   torch::Tensor data;
-  int64_t current;
+  int64_t current_pos;
+  int64_t max_pos;
 };
 
 } // namespace detail
