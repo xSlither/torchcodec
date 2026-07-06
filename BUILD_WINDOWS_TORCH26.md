@@ -12,8 +12,8 @@ hardware NVENC encode) and a materially improved NVDEC integration.
 ## 1. Why `v0.10.0`
 
 | Version | C++ standard | Official `torch` pairing |
-|---|---|---|---|
-| 0.7.0  | 0 | C++17 | 2.8 |
+|---|---|---|
+| 0.7.0 | C++17 | 2.8 |
 | **0.10.0** | **C++17** | 2.10 |
 | **0.11.0** | **C++20** | 2.11 |
 
