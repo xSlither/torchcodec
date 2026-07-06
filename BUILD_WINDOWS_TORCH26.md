@@ -110,6 +110,23 @@ major-version/soname matching, the Windows DLL-search gotcha). Summary:
   14.39 / VS 17.9, via `vcvarsall -vcvars_ver=14.39`) and use the Ninja generator
   (already wired into `setup.py`'s win32 branch) so the pin actually takes effect
   (MSBuild ignores the shell environment and always grabs the newest toolset).
+- **`pybind11_DIR` and `Python3_ROOT_DIR` must both be set explicitly for a `uv`
+  venv, in the *same* shell session as the build command.** `find_package(pybind11
+  REQUIRED)` and the later `find_package(Python3 3.11 EXACT COMPONENTS Development)`
+  both need hints a `uv`-managed venv doesn't expose by default:
+  ```bat
+  for /f "delims=" %i in ('python -m pybind11 --cmakedir') do set pybind11_DIR=%i
+  set Python3_ROOT_DIR=%USERPROFILE%\AppData\Roaming\uv\python\cpython-3.11.12-windows-x86_64-none
+  ```
+  (adjust the `cpython-...` folder name to whatever `uv python list` shows). Without
+  `Python3_ROOT_DIR`, CMake finds the interpreter fine (an earlier, looser pybind11-
+  driven Python3 search succeeds) but then fails the later exact-version `Development`
+  component search with `Could NOT find Python3 (missing: Python3_LIBRARIES
+  Python3_INCLUDE_DIRS ...)`, because a venv doesn't carry its own copy of
+  `libs\python311.lib`/full headers — those live only in the base standalone install.
+  **Live-confirmed (2026-07, Windows + CUDA 12.3 + MSVC 14.39):** with both variables
+  set, CMake configure resolves cleanly (`Found Python3: ...\libs\python311.lib
+  (found suitable exact version "3.11.12")`).
 - **FFmpeg "shared" dev libraries**: either a BtbN/gyan `shared` build + `pkg-config`,
   or `BUILD_AGAINST_ALL_FFMPEG_FROM_S3=1` to fetch Meta's prebuilt non-GPL libs
   (build-time only, no NVDEC at runtime — fine for a CPU build; use a real
@@ -185,13 +202,25 @@ CUDA-tensor encode call).
 
 ## 4. Known risks specific to this 0.10.0 base (beyond the 0.7.0 port's own risk log)
 
-- **NPP library set may need adjusting.** The CMake patch lists
-  `CUDA::cudart`/`CUDA::nppicc`/`CUDA::nppig`/`CUDA::nppc` (validated against 0.7.0's
-  `CudaDeviceInterface.cpp`). 0.10.0's `CudaDeviceInterface.cpp` and the new
-  `CUDACommon.cpp` may call additional NPP entry points (e.g. `nppidei` for some
-  color-conversion variants) — if the linker reports an unresolved NPP symbol, add the
-  corresponding `CUDA::npp*` imported target; do not add `CUDA::nppidei` etc.
-  speculatively.
+- **NPP library set: confirmed sufficient, live.** ✅ **Resolved (2026-07,
+  Windows + CUDA 12.3 + MSVC 14.39 + torch 2.6.0+cu124).** The full CMake configure
+  and Ninja build (120/120 steps) completed cleanly for every one of
+  `CudaDeviceInterface.cpp`, `BetaCudaDeviceInterface.cpp`, `CUDACommon.cpp`,
+  `NVDECCache.cpp`, `NVCUVIDRuntimeLoader.cpp`, and `Encoder.cpp` across all five
+  FFmpeg targets (4/5/6/7/8), linking against `CUDA::cudart`/`CUDA::nppicc`/
+  `CUDA::nppig`/`CUDA::nppc` with zero unresolved NPP symbols — no additional
+  `CUDA::npp*` target was needed.
+- **`TORCHCODEC_BUNDLE_CUDA_DLLS=1` broke editable installs (`pip install -e .`).
+  ✅ Fixed (2026-07).** `copy_extensions_to_source()` (only invoked for editable
+  installs, never for a real `python -m build --wheel`, which is why the 0.7.0 port
+  never hit this) asserted every `.dll`/`.pyd` file found in the install prefix
+  contained `"libtorchcodec"` in its name — but `_maybe_bundle_cuda_runtime_dlls()`
+  copies `cudart64_12.dll`/`nppc64_12.dll`/`nppicc64_12.dll`/`nppig64_12.dll` into
+  that exact same directory when the env var is set, tripping the assertion
+  (`AssertionError` in `copy_extensions_to_source`, confirmed live). Fixed by hoisting
+  the bundled-DLL prefix tuple to a shared `CMakeBuild._BUNDLED_CUDA_DLL_PREFIXES`
+  constant and widening the assertion to accept either `"libtorchcodec"` in the name
+  or a recognized bundled-CUDA-DLL prefix.
 - **`BetaCudaDeviceInterface` is untested by this port and is not required.** It's a
   separate opt-in decode path (`device="cuda:0:beta"`); if the user's downstream code
   never requests the `beta` variant, its extra `nvcuvid_include/*.h` compile units
@@ -230,11 +259,23 @@ CUDA-tensor encode call).
       `.h` file.
 - [x] Re-authored the CI workflow (`windows_torch26_wheel.yaml`) for the 0.10.0
       base, extending the CPU smoke test to also cover `VideoEncoder.to_file`.
-- [ ] **Not yet done (needs a Windows box with CUDA + MSVC — cannot be done from this
-      research/patch environment):** actually run the build (§3.1), confirm NVDEC
-      decode still engages (`nvidia-smi dmon`), and validate the NEW CUDA-resident
-      `VideoEncoder` path end-to-end (§3.2, §4). This is the direct analogue of
-      Milestones 1–2 from the 0.7.0 port, on the same toolchain, against `v0.10.0`.
+- [x] **Milestone 1/2 equivalent — DONE, live-confirmed (2026-07).** Built on the
+      real target toolchain (Windows + CUDA 12.3 + MSVC 14.39 + torch 2.6.0+cu124,
+      `ENABLE_CUDA=1`, `TORCHCODEC_BUNDLE_CUDA_DLLS=1`): CMake configure resolved
+      pybind11/CUDAToolkit/Torch/Python3 cleanly (once `pybind11_DIR` +
+      `Python3_ROOT_DIR` were set — see §3.1), all 120 Ninja build steps succeeded
+      (every FFmpeg target 4/5/6/7/8 × core/custom_ops/pybind_ops, including
+      `CudaDeviceInterface`/`BetaCudaDeviceInterface`/`CUDACommon`/`NVDECCache`/
+      `NVCUVIDRuntimeLoader`/`Encoder`), `cmake --install` succeeded, and the CUDA
+      runtime DLLs bundled successfully. Two real environment-specific issues
+      surfaced and were fixed in place (§3.1's `Python3_ROOT_DIR` note; §4's
+      `copy_extensions_to_source` assertion fix) — both now resolved.
+- [ ] **Still open: runtime validation (§3.2)** — actually import the built package
+      and confirm `device='cuda'` decode engages NVDEC (`nvidia-smi dmon`, `dec`
+      column) and that `VideoEncoder(...).to_file(...)` succeeds for both a CPU
+      tensor and a CUDA-resident tensor (confirming the hardware-encode substitution
+      path, not just that it compiles). The build/link/install side is now fully
+      proven; only the runtime decode/encode behavior remains to be exercised.
 - [ ] CI workflow has not been run (`workflow_dispatch` is manual) — first run will
       likely need the same kind of tuning the 0.7.0 CI did (action version pins,
       FFmpeg asset naming).

@@ -162,6 +162,12 @@ class CMakeBuild(build_ext):
         )
         self._maybe_bundle_cuda_runtime_dlls()
 
+    # Filename prefixes (lower-cased) of the NVIDIA redistributable DLLs
+    # _maybe_bundle_cuda_runtime_dlls() may copy into the install prefix
+    # alongside libtorchcodec_*. copy_extensions_to_source() (editable installs
+    # only) needs to recognize these as legitimate, not just "libtorchcodec".
+    _BUNDLED_CUDA_DLL_PREFIXES = ("nppc64_", "nppicc64_", "nppig64_", "cudart64_")
+
     def _maybe_bundle_cuda_runtime_dlls(self):
         # Optionally copy the NVIDIA NPP (+ cudart) runtime DLLs into the package
         # directory so the resulting Windows wheel is self-contained and imports
@@ -201,10 +207,9 @@ class CMakeBuild(build_ext):
         # nppc = NPP core; nppicc = color conversion (nppiNV12ToRGB_*); nppig =
         # geometry; cudart = CUDA runtime (also shipped by torch, bundled here so
         # the wheel stands alone).
-        wanted_prefixes = ("nppc64_", "nppicc64_", "nppig64_", "cudart64_")
         copied = []
         for dll in sorted(cuda_bin.glob("*.dll")):
-            if dll.name.lower().startswith(wanted_prefixes):
+            if dll.name.lower().startswith(self._BUNDLED_CUDA_DLL_PREFIXES):
                 shutil.copy2(dll, Path(self._install_prefix) / dll.name)
                 copied.append(dll.name)
         if copied:
@@ -239,7 +244,10 @@ class CMakeBuild(build_ext):
 
         for ext in extensions:
             for lib_file in self._install_prefix.glob(f"*.{ext}"):
-                assert "libtorchcodec" in lib_file.name
+                is_bundled_cuda_dll = lib_file.name.lower().startswith(
+                    self._BUNDLED_CUDA_DLL_PREFIXES
+                )
+                assert "libtorchcodec" in lib_file.name or is_bundled_cuda_dll
                 destination = Path("src/torchcodec/") / lib_file.name
                 print(f"Copying {lib_file} to {destination}")
                 self.copy_file(lib_file, destination, level=self.verbose)
