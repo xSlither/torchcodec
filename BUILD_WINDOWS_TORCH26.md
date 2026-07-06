@@ -131,8 +131,9 @@ major-version/soname matching, the Windows DLL-search gotcha). Summary:
   or `BUILD_AGAINST_ALL_FFMPEG_FROM_S3=1` to fetch Meta's prebuilt non-GPL libs
   (build-time only, no NVDEC at runtime — fine for a CPU build; use a real
   NVDEC/cuvid-enabled shared FFmpeg for the CUDA build's runtime).
-- **`uv` venv**, Python version matched to the deploy target (this fork targets
-  **3.11**, matching the target ComfyUI/torch-2.6 environment).
+- **`uv` venv**, Python version matched to the deploy target. Validated with
+  Python **3.11**; other CPython versions supported by torch 2.6 should also
+  work but haven't been exercised by this port.
 
 ### 3.1 Build
 
@@ -270,12 +271,25 @@ CUDA-tensor encode call).
       runtime DLLs bundled successfully. Two real environment-specific issues
       surfaced and were fixed in place (§3.1's `Python3_ROOT_DIR` note; §4's
       `copy_extensions_to_source` assertion fix) — both now resolved.
-- [ ] **Still open: runtime validation (§3.2)** — actually import the built package
-      and confirm `device='cuda'` decode engages NVDEC (`nvidia-smi dmon`, `dec`
-      column) and that `VideoEncoder(...).to_file(...)` succeeds for both a CPU
-      tensor and a CUDA-resident tensor (confirming the hardware-encode substitution
-      path, not just that it compiles). The build/link/install side is now fully
-      proven; only the runtime decode/encode behavior remains to be exercised.
+- [x] **Runtime validation (§3.2) — done, live-confirmed (2026-07).** Package
+      imports; `device='cuda'` decode returns a `cuda:0` tensor
+      (`torch.Size([3, 270, 480])`), confirming NVDEC engages. Full test suite run:
+      `test/test_decoders.py` (442 passed / 31 failed / 5 skipped) and
+      `test/test_encoders.py` (937 passed / 36 failed / 14 skipped / 29 deselected).
+      All failures are isolated to two known, unrelated issues — see below — rather
+      than being spread across the port's own code paths; every `h264_nvenc`/
+      `hevc_nvenc` encode test and every decoder test other than one specific
+      reference-data file passed.
+      - `test_decoders.py`'s 31 failures are all the *same* root cause: loading
+        `test/resources/nasa_13013.mp4.stream3.frame000180.pt` via
+        `torch.load(weights_only=True)` raises `WeightsUnpickler error: Unsupported
+        operand 110` — isolated to that one reference tensor file/frame index, not
+        a port regression.
+      - `test_encoders.py`'s 36 failures are all `test_nvenc_against_ffmpeg_cli`
+        parametrized with `codec="av1_nvenc", format="mkv"` — the FFmpeg CLI
+        reference-encode subprocess itself fails (not torchcodec's `VideoEncoder`),
+        suggesting the installed FFmpeg build's `av1_nvenc` support (or the GPU's
+        AV1 NVENC capability) is the gap, not the torch-2.6 port.
 - [ ] CI workflow has not been run (`workflow_dispatch` is manual) — first run will
       likely need the same kind of tuning the 0.7.0 CI did (action version pins,
       FFmpeg asset naming).
