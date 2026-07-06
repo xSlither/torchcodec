@@ -9,18 +9,13 @@ hardware NVENC encode) and a materially improved NVDEC integration.
 
 ---
 
-## 1. Why `v0.10.0`, and definitively not `v0.11+`
+## 1. Why `v0.10.0`
 
-Walking the upstream tags with full git access (not just release notes) settles this
-precisely, by grepping the actual C++ source at each release tag:
-
-| Version | `torch::stable` / `StableDevice` refs in `_core/` | C++ standard | Official `torch` pairing |
+| Version | C++ standard | Official `torch` pairing |
 |---|---|---|---|
 | 0.7.0  | 0 | C++17 | 2.8 |
-| 0.8.1  | 0 | C++17 | 2.9 |
-| 0.9.1  | 0 | C++17 | 2.9 |
-| **0.10.0** | **0** | **C++17** | 2.10 |
-| **0.11.0** | **~150+ across every core file** | **C++20** | 2.11 |
+| **0.10.0** | **C++17** | 2.10 |
+| **0.11.0** | **C++20** | 2.11 |
 
 **`v0.11.0` is a hard wall, not a hard-but-portable step.** Between 0.10 and 0.11,
 torchcodec's entire `_core` module was rewritten around PyTorch's new stable ABI
