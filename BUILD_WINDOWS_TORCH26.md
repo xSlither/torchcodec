@@ -280,11 +280,21 @@ CUDA-tensor encode call).
       than being spread across the port's own code paths; every `h264_nvenc`/
       `hevc_nvenc` encode test and every decoder test other than one specific
       reference-data file passed.
-      - `test_decoders.py`'s 31 failures are all the *same* root cause: loading
-        `test/resources/nasa_13013.mp4.stream3.frame000180.pt` via
-        `torch.load(weights_only=True)` raises `WeightsUnpickler error: Unsupported
-        operand 110` — isolated to that one reference tensor file/frame index, not
-        a port regression.
+      - `test_decoders.py`'s 31 failures were all the *same* root cause, and are
+        now **fixed**: `test/resources/nasa_13013.mp4.stream3.frame000180.pt` was
+        a **git symlink** to `nasa_13013.mp4.time6.000000.pt` (same underlying
+        frame, kept once on disk under two test-data names upstream). Windows
+        git, without symlink privileges (Developer Mode + `core.symlinks=true`,
+        rarely configured by default), checks out a symlink as a **plain text
+        file containing the literal target path string** instead of the actual
+        content or a real link. That 30-byte string, `nasa_13013.mp4.time6.000000.pt`,
+        starts with `'n'` — byte value **110** — which is exactly what
+        `WeightsUnpickler error: Unsupported operand 110` was choking on: `torch.load`
+        tried to parse that literal filename text as a pickle stream. Not a torch-2.6
+        port issue at all — fixed by replacing the symlink with a real copy of the
+        target file's bytes (`git` now tracks it as a normal `100644` blob, mode
+        change from `120000`), which sidesteps the Windows symlink checkout gap
+        entirely with no elevated privileges required.
       - `test_encoders.py`'s 36 failures are all `test_nvenc_against_ffmpeg_cli`
         parametrized with `codec="av1_nvenc", format="mkv"` — the FFmpeg CLI
         reference-encode subprocess itself fails (not torchcodec's `VideoEncoder`),
