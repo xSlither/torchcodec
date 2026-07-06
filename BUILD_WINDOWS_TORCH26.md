@@ -222,6 +222,23 @@ CUDA-tensor encode call).
   the bundled-DLL prefix tuple to a shared `CMakeBuild._BUNDLED_CUDA_DLL_PREFIXES`
   constant and widening the assertion to accept either `"libtorchcodec"` in the name
   or a recognized bundled-CUDA-DLL prefix.
+- **`test_nvenc_against_ffmpeg_cli[...av1_nvenc...]` fails on pre-Ada GPUs — this
+  is a hardware fact, not a port bug.** 36 local test failures, all in this one
+  parametrized test with `codec="av1_nvenc", format="mkv"`, across every
+  color-space/color-range/method combination. The failure is in the test's own
+  **FFmpeg CLI reference-encode subprocess** (`subprocess.run(ffmpeg_cmd,
+  check=True, ...)`) — i.e. plain `ffmpeg -c:v av1_nvenc` fails on its own,
+  before torchcodec's `VideoEncoder` is even invoked. AV1 hardware encode via
+  NVENC only exists on **Ada Lovelace (RTX 40-series / L4 / L40(S) / RTX 6000
+  Ada) or newer** — Turing and Ampere GPUs (RTX 20/30-series, A-series
+  datacenter cards) have no AV1 NVENC engine at all, so this fails
+  unconditionally and deterministically regardless of driver or FFmpeg build.
+  Upstream already skips this test on GitHub CI and on FFmpeg 4
+  (`test/test_encoders.py`'s `test_nvenc_against_ffmpeg_cli` parametrize marks),
+  but has no skip for GPU generation, so it simply fails on any non-Ada GPU.
+  `h264_nvenc`/`hevc_nvenc` are unaffected and passed in full. If your build
+  machine isn't Ada-or-newer, skip it explicitly:
+  `pytest test/test_encoders.py -q -k "not av1_nvenc"`.
 - **`BetaCudaDeviceInterface` is untested by this port and is not required.** It's a
   separate opt-in decode path (`device="cuda:0:beta"`); if the user's downstream code
   never requests the `beta` variant, its extra `nvcuvid_include/*.h` compile units
@@ -296,10 +313,9 @@ CUDA-tensor encode call).
         change from `120000`), which sidesteps the Windows symlink checkout gap
         entirely with no elevated privileges required.
       - `test_encoders.py`'s 36 failures are all `test_nvenc_against_ffmpeg_cli`
-        parametrized with `codec="av1_nvenc", format="mkv"` — the FFmpeg CLI
-        reference-encode subprocess itself fails (not torchcodec's `VideoEncoder`),
-        suggesting the installed FFmpeg build's `av1_nvenc` support (or the GPU's
-        AV1 NVENC capability) is the gap, not the torch-2.6 port.
+        parametrized with `codec="av1_nvenc", format="mkv"` — root-caused to a
+        pre-Ada-Lovelace GPU lacking an AV1 NVENC engine at all, not the
+        torch-2.6 port; see §4 for the full explanation and a filter to skip it.
 - [ ] CI workflow has not been run (`workflow_dispatch` is manual) — first run will
       likely need the same kind of tuning the 0.7.0 CI did (action version pins,
       FFmpeg asset naming).
